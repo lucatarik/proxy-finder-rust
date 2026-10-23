@@ -5,6 +5,7 @@ use crate::model::{now_secs, Candidate, GoodProxy};
 use crate::rating::proxy_score;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -170,8 +171,8 @@ struct Probe {
     ms: u32,
 }
 
-fn client_for(c: &Candidate) -> Result<reqwest::Client, String> {
-    let proxy = reqwest::Proxy::all(c.key()).map_err(|e| e.to_string())?;
+fn client_for(key: &str) -> Result<reqwest::Client, String> {
+    let proxy = reqwest::Proxy::all(key).map_err(|e| e.to_string())?;
     reqwest::Client::builder()
         .proxy(proxy)
         .redirect(reqwest::redirect::Policy::none())
@@ -273,7 +274,7 @@ async fn https_probe(client: &reqwest::Client, cfg: &TestConfig, idx: usize, rea
 
 async fn run_test(c: &Candidate, real_ip: &str, cfg: &TestConfig, idx: usize) -> Outcome {
     let dead = |reason: String| Outcome::Dead { reason };
-    let client = match client_for(c) {
+    let client = match client_for(&c.key()) {
         Ok(cl) => cl,
         Err(e) => return dead(e),
     };
@@ -321,6 +322,68 @@ async fn run_test(c: &Candidate, real_ip: &str, cfg: &TestConfig, idx: usize) ->
         checked_at: now,
         alive: true,
     })
+}
+
+/// File scaricato da `speed_test` (Cloudflare, 2 MB).
+pub const SPEED_URL: &str = "https://speed.cloudflare.com/__down?bytes=2000000";
+
+/// Esito di `speed_test`: byte arrivati, secondi impiegati e se il file è arrivato tutto.
+#[derive(Debug, Clone, Copy)]
+pub struct Speed {
+    pub bytes: u64,
+    pub secs: f64,
+    pub complete: bool,
+}
+
+impl Speed {
+    pub fn bytes_per_sec(&self) -> f64 {
+        self.bytes as f64 / self.secs.max(1e-3)
+    }
+}
+
+/// Scarica `SPEED_URL` attraverso `p`. Il tempo parte dalla richiesta (connessione e TLS
+/// comprese). `limit_ms` è il tetto condiviso fra le prove in parallelo: chi finisce lo abbassa al
+/// proprio tempo, e chi lo supera si ferma subito (sarebbe comunque più lento). Una prova fermata
+/// dal tetto restituisce quanto è arrivato (`complete: false`); errore se non arriva niente.
+pub async fn speed_test(p: &GoodProxy, limit_ms: &AtomicU64) -> Result<Speed, String> {
+    let client = client_for(&p.key())?;
+    let t0 = Instant::now();
+    let deadline = || t0 + Duration::from_millis(limit_ms.load(Ordering::Relaxed));
+    // il tetto può scendere mentre si aspetta: si ricontrolla almeno ogni 200 ms
+    let tick = || tokio::time::sleep_until(deadline().min(Instant::now() + Duration::from_millis(200)).into());
+    let speed = |bytes, complete| Speed { bytes, secs: t0.elapsed().as_secs_f64(), complete };
+    let slower = || Err("più lento del più veloce".to_string());
+
+    let send = client.get(SPEED_URL).send();
+    tokio::pin!(send);
+    let mut r = loop {
+        if Instant::now() >= deadline() {
+            return slower();
+        }
+        tokio::select! {
+            r = &mut send => break r.map_err(|e| err_text(&e))?,
+            _ = tick() => {}
+        }
+    };
+    if !r.status().is_success() {
+        return Err(format!("HTTP {}", r.status().as_u16()));
+    }
+    let mut got: u64 = 0;
+    loop {
+        if Instant::now() >= deadline() {
+            return if got == 0 { slower() } else { Ok(speed(got, false)) };
+        }
+        tokio::select! {
+            c = r.chunk() => match c.map_err(|e| err_text(&e))? {
+                Some(chunk) => got += chunk.len() as u64,
+                None => break,
+            },
+            _ = tick() => {}
+        }
+    }
+    let s = speed(got, true);
+    limit_ms.fetch_min((s.secs * 1000.0).ceil() as u64, Ordering::Relaxed);
+    Ok(s)
 }
 
 /// Prova un candidato. `echo_idx` sceglie da quale sito di eco partire (rotazione).

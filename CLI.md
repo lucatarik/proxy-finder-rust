@@ -195,7 +195,13 @@ Trova un proxy nuovo e ci collega il relay, senza altri passaggi:
    il **più veloce** di questa seconda prova. Chi risponde resta tra i buoni con la latenza
    aggiornata, chi non risponde più resta tra i buoni come "non risponde"; se non risponde nessuno
    riprende la scansione;
-5. avvia il relay verso il proxy verificato, come `relay`.
+5. con `--speed`, invece di prendere chi risponde prima, scarica 2 MB
+   (`speed.cloudflare.com`) attraverso ciascun proxy che ha risposto, 3 alla volta, e sceglie il
+   più veloce in download. Il tempo comprende connessione e TLS. Il tetto parte da 15 secondi e,
+   appena un proxy finisce i 2 MB, scende al suo tempo: chi lo supera viene fermato e scartato,
+   perché sarebbe comunque più lento. Se nessuno finisce entro 15 secondi vince chi ha scaricato
+   di più; se nessuno scarica niente, usa quello che risponde prima;
+6. avvia il relay verso il proxy verificato, come `relay`.
 
 Esiti, rating delle sorgenti, storico e proxy buoni si salvano come con `test` (la verifica del
 punto 4 non tocca i rating, come `recheck`). Se la lista finisce con meno di 10 proxy https, usa
@@ -206,7 +212,7 @@ più tardi un'altra istanza gli cambia il proxy, stampa il nuovo IP di uscita su
 Su stderr vanno solo gli errori veri. Con `-v` (`--verbose`) stampa tutto: avanzamento, esiti
 delle prove, proxy scelto, dettagli del relay.
 
-Opzioni: `--port N` (porta del relay), `-v` e, come per `test`, `-p`, `-c`, `-t`, `--order`, `-q`
+Opzioni: `--port N` (porta del relay), `--speed`, `-v` e, come per `test`, `-p`, `-c`, `-t`, `--order`, `-q`
 (quest'ultimo vale con `-v`). Quanti provare (128), quanti in parallelo (128) e lo scarto dei
 "solo http" sono fissi e non cambiano le impostazioni salvate.
 
@@ -217,6 +223,7 @@ precedente alla 0.1.7 non ce l'ha (lì contano solo i socks5) finché non la ris
 ```bash
 proxy-finder --auto                 # relay su 127.0.0.1:8899, stampa l'IP di uscita
 proxy-finder --auto -v -p socks5 -c ITA,DEU -t normali --port 3128
+proxy-finder --auto --speed         # sceglie il più veloce in download, non in latenza
 ```
 
 Il primo `--auto` resta in esecuzione (tiene il relay), quindi `ip=$(proxy-finder --auto)` non
