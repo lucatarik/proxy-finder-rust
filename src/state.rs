@@ -6,7 +6,7 @@ use crate::job::JobKind;
 use crate::model::{now_secs, Candidate, GoodProxy, NetStats, Source};
 use crate::rating;
 use crate::store::{Order, Settings, SortBy, Store};
-use crate::tester::Outcome;
+use crate::tester::{Outcome, Speed};
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
@@ -201,7 +201,7 @@ impl State {
                 self.candidates.retain(|c| !h.contains(&c.key()));
                 self.save(&[Part::Sources, Part::Proxies, Part::Candidates, Part::History, Part::Net])
             }
-            JobKind::Recheck | JobKind::Connect => self.save(&[Part::Proxies]),
+            JobKind::Recheck | JobKind::Connect | JobKind::Speed => self.save(&[Part::Proxies]),
             JobKind::VerifyIp => Vec::new(),
         }
     }
@@ -242,16 +242,27 @@ impl State {
         before - self.proxies.len()
     }
 
+    /// Esito di uno speedtest: la velocità misurata (anche se fermato al tetto); 0 se scartato o
+    /// fallito.
+    pub fn apply_speed(&mut self, key: &str, r: &Result<Speed, String>) {
+        if let Some(p) = self.proxies.iter_mut().find(|p| p.key() == key) {
+            p.speed_bps = Some(r.as_ref().map_or(0, |s| s.bytes_per_sec() as u64));
+        }
+    }
+
     pub fn sorted_proxies(&self) -> Vec<GoodProxy> {
         let mut l = self.proxies.clone();
         match self.settings.sort {
             SortBy::Latency => l.sort_by_key(|p| (!p.alive, p.latency_ms)),
             SortBy::Added => l.sort_by_key(|p| std::cmp::Reverse(p.added_at)),
+            // i più veloci prima, poi i mai misurati, ultimi i non funzionanti
+            SortBy::Speed => l.sort_by_key(|p| (!p.alive, p.speed_bps.is_none(), std::cmp::Reverse(p.speed_bps), p.latency_ms)),
         }
         l
     }
 
-    /// Proxy per "Connetti al più veloce": funzionanti, con https, in ordine di latenza.
+    /// Proxy per "Connetti al più veloce" e per lo speedtest (il file di prova è in https):
+    /// funzionanti, con https, in ordine di latenza.
     pub fn fastest_https(&self) -> Vec<GoodProxy> {
         let mut l: Vec<GoodProxy> = self.proxies.iter().filter(|p| p.https && p.alive).cloned().collect();
         l.sort_by_key(|p| p.latency_ms);

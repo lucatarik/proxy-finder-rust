@@ -3,6 +3,7 @@
 use super::{ago, latency_color, App, RED};
 use eframe::egui::{self, Color32, RichText};
 use proxy_finder::model::GoodProxy;
+use proxy_finder::rating;
 use proxy_finder::store::SortBy;
 
 impl App {
@@ -12,6 +13,14 @@ impl App {
         ui.horizontal(|ui| {
             if ui.add_enabled(!busy && !self.st.proxies.is_empty(), egui::Button::new("Ricontrolla")).clicked() {
                 self.start_recheck();
+            }
+            let n_speed = self.st.proxies.iter().filter(|p| p.alive && p.https).count();
+            if ui
+                .add_enabled(!busy && n_speed > 0, egui::Button::new(format!("Speedtest ({n_speed})")))
+                .on_hover_text("Scarica 2 MB attraverso ogni proxy funzionante con https, 3 alla volta. Il tetto parte da 15 s e scende al tempo del più veloce: chi lo supera viene fermato.")
+                .clicked()
+            {
+                self.start_speed();
             }
             if ui
                 .add_enabled(!busy && n_dead > 0, egui::Button::new(format!("Elimina non funzionanti ({n_dead})")))
@@ -23,6 +32,7 @@ impl App {
             ui.label("Ordina per");
             let before = self.st.settings.sort;
             ui.selectable_value(&mut self.st.settings.sort, SortBy::Latency, "latenza");
+            ui.selectable_value(&mut self.st.settings.sort, SortBy::Speed, "velocità");
             ui.selectable_value(&mut self.st.settings.sort, SortBy::Added, "aggiunta");
             if before != self.st.settings.sort {
                 self.save_settings();
@@ -60,8 +70,8 @@ impl App {
         let mut connect: Option<GoodProxy> = None;
         let mut remove: Option<String> = None;
         egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Grid::new("proxies").striped(true).num_columns(9).spacing([12.0, 6.0]).show(ui, |ui| {
-                for h in ["Paese", "Indirizzo", "Tipo", "Latenza", "IP uscita", "Score", "Sorgenti", "Verificato", ""] {
+            egui::Grid::new("proxies").striped(true).num_columns(10).spacing([12.0, 6.0]).show(ui, |ui| {
+                for h in ["Paese", "Indirizzo", "Tipo", "Latenza", "Download", "IP uscita", "Score", "Sorgenti", "Verificato", ""] {
                     ui.label(RichText::new(h).strong());
                 }
                 ui.end_row();
@@ -97,6 +107,8 @@ impl App {
                     } else {
                         ui.label(RichText::new("non risponde").color(RED));
                     }
+                    let speed = RichText::new(rating::speed_text(p.speed_bps));
+                    ui.label(dim(if p.speed_bps == Some(0) { speed.color(RED) } else { speed }));
                     ui.label(dim(RichText::new(&p.exit_ip).monospace()));
                     ui.label(dim(RichText::new(format!("{:.0}", p.score * 100.0))));
                     let short = match p.sources.len() {

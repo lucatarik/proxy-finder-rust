@@ -23,6 +23,7 @@ pub enum Order {
 pub enum SortBy {
     Latency,
     Added,
+    Speed,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

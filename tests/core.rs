@@ -141,6 +141,7 @@ fn good(score_latency: u32, https: bool, sources: &[&str]) -> Outcome {
         added_at: 0,
         checked_at: 0,
         alive: true,
+        speed_bps: None,
     })
 }
 
@@ -670,6 +671,7 @@ fn gp(ip: &str) -> GoodProxy {
         added_at: 0,
         checked_at: 0,
         alive: true,
+        speed_bps: None,
     }
 }
 
@@ -789,4 +791,34 @@ fn tls_promising_candidates_first() {
     st.settings.test_count = 3;
     let keys: Vec<String> = st.pick_candidates_tls_first().iter().map(|c| c.ip.to_string()).collect();
     assert_eq!(keys, vec!["1.0.0.3", "1.0.0.4", "1.0.0.1"]);
+}
+
+// ---------- speedtest ----------
+
+#[test]
+fn speed_saved_and_sorted() {
+    use proxy_finder::store::SortBy;
+    use proxy_finder::tester::Speed;
+    let mut st = proxy_finder::state::State::load(None);
+    let (a, b, c, mut d) = (gp("1.1.1.1"), gp("2.2.2.2"), gp("3.3.3.3"), gp("4.4.4.4"));
+    d.alive = false;
+    st.proxies = vec![a.clone(), b.clone(), c.clone(), d.clone()];
+    st.apply_speed(&a.key(), &Ok(Speed { bytes: 1_000_000, secs: 2.0, complete: false }));
+    st.apply_speed(&b.key(), &Ok(Speed { bytes: 2_000_000, secs: 1.0, complete: true }));
+    st.apply_speed(&d.key(), &Err("più lento del più veloce".into()));
+    assert_eq!(st.proxies[0].speed_bps, Some(500_000));
+    assert_eq!(st.proxies[3].speed_bps, Some(0));
+    // un ricontrollo aggiorna la latenza ma tiene la velocità misurata
+    st.upsert_good(&b, false);
+    assert_eq!(st.proxies[1].speed_bps, Some(2_000_000));
+
+    st.settings.sort = SortBy::Speed;
+    let order: Vec<String> = st.sorted_proxies().iter().map(|p| p.ip.to_string()).collect();
+    assert_eq!(order, ["2.2.2.2", "1.1.1.1", "3.3.3.3", "4.4.4.4"]);
+
+    // vecchi file senza il campo: si leggono, e None non viene scritto
+    let json = serde_json::to_string(&c).unwrap();
+    assert!(!json.contains("speed_bps"));
+    let back: GoodProxy = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.speed_bps, None);
 }

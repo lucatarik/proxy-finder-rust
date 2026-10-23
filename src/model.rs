@@ -204,6 +204,10 @@ pub struct GoodProxy {
     pub checked_at: i64,
     /// false dopo un ricontrollo fallito ("non risponde").
     pub alive: bool,
+    /// Velocità di download dell'ultimo speedtest, in byte/s (0 = scartato o fallito,
+    /// None = mai misurata).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_bps: Option<u64>,
 }
 
 impl GoodProxy {

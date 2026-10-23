@@ -321,11 +321,16 @@ async fn run_test(c: &Candidate, real_ip: &str, cfg: &TestConfig, idx: usize) ->
         added_at: now,
         checked_at: now,
         alive: true,
+        speed_bps: None,
     })
 }
 
 /// File scaricato da `speed_test` (Cloudflare, 2 MB).
 pub const SPEED_URL: &str = "https://speed.cloudflare.com/__down?bytes=2000000";
+/// Tetto iniziale di uno speedtest (poi scende al tempo del più veloce).
+pub const SPEED_LIMIT: Duration = Duration::from_secs(15);
+/// Speedtest contemporanei.
+pub const SPEED_PARALLEL: usize = 3;
 
 /// Esito di `speed_test`: byte arrivati, secondi impiegati e se il file è arrivato tutto.
 #[derive(Debug, Clone, Copy)]
@@ -384,6 +389,37 @@ pub async fn speed_test(p: &GoodProxy, limit_ms: &AtomicU64) -> Result<Speed, St
     let s = speed(got, true);
     limit_ms.fetch_min((s.secs * 1000.0).ceil() as u64, Ordering::Relaxed);
     Ok(s)
+}
+
+/// Speedtest di `list`, `SPEED_PARALLEL` alla volta, con un tetto condiviso che parte da
+/// `SPEED_LIMIT` e scende al tempo del più veloce arrivato in fondo (vedi `speed_test`).
+/// `on_result` riceve ogni esito appena arriva. Si ferma con `cancel`.
+pub async fn speed_pool(list: Vec<GoodProxy>, cancel: &CancellationToken, mut on_result: impl FnMut(&GoodProxy, Result<Speed, String>)) {
+    let limit_ms = std::sync::Arc::new(AtomicU64::new(SPEED_LIMIT.as_millis() as u64));
+    let mut tests = futures::stream::iter(list)
+        .map(|p| {
+            let limit_ms = limit_ms.clone();
+            async move {
+                let r = speed_test(&p, &limit_ms).await;
+                (p, r)
+            }
+        })
+        .buffer_unordered(SPEED_PARALLEL);
+    loop {
+        tokio::select! {
+            r = tests.next() => match r {
+                Some((p, r)) => on_result(&p, r),
+                None => return,
+            },
+            _ = cancel.cancelled() => return,
+        }
+    }
+}
+
+/// Il migliore fra gli esiti di uno speedtest: un download completo batte sempre uno fermato al
+/// tetto, poi conta la velocità.
+pub fn faster(a: &Speed, b: &Speed) -> bool {
+    (a.complete, a.bytes_per_sec()) > (b.complete, b.bytes_per_sec())
 }
 
 /// Prova un candidato. `echo_idx` sceglie da quale sito di eco partire (rotazione).

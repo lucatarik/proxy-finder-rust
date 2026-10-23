@@ -184,3 +184,12 @@ pub fn order_by_priority(mut list: Vec<Candidate>, ratings: &HashMap<String, f64
     });
     list
 }
+
+/// Velocità di download per GUI e CLI: "1.23 MB/s", "scartato" (0) o "—" (mai misurata).
+pub fn speed_text(bps: Option<u64>) -> String {
+    match bps {
+        None => "—".into(),
+        Some(0) => "scartato".into(),
+        Some(b) => format!("{:.2} MB/s", b as f64 / 1e6),
+    }
+}

@@ -6,6 +6,12 @@ provider network (ASN) and /24 by how many good proxies it yields, and tests the
 first. A local relay on `127.0.0.1:8899` routes any program through the proxy you pick;
 `proxy-finder --auto` finds, verifies and connects to the fastest one by itself.
 
+A speedtest (2 MB through each working proxy, 3 at a time; slower ones are cut off as soon as
+the fastest finishes) measures download speed: in the GUI with **Speedtest** on the Proxy tab,
+from the command line with `proxy-finder --auto --speed`, which picks the fastest download instead
+of the lowest latency. Speeds are saved, and the proxy list can be sorted by them (GUI, or
+`proxy-finder list --sort speed`).
+
 Prebuilt binaries for Linux (x86_64), macOS (Apple Silicon) and Windows (x86_64) are on the
 [Releases](https://github.com/lucatarik/proxy-finder-rust/releases) page. GUI, CLI and relay work
 on all three; the system tray icon (`proxy-finder tray`) is Linux only, because it uses the

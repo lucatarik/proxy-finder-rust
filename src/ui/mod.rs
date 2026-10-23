@@ -244,6 +244,20 @@ impl App {
         self.begin(h);
     }
 
+    /// Speedtest dei proxy funzionanti con https.
+    pub fn start_speed(&mut self) {
+        if self.busy() {
+            return;
+        }
+        let list = self.st.fastest_https();
+        if list.is_empty() {
+            self.errors.push("nessun proxy https funzionante da misurare".into());
+            return;
+        }
+        let h = job::start_speed(self.rt.handle(), self.repaint.clone(), list);
+        self.begin(h);
+    }
+
     /// Riverifica e connette: con `only` un proxy preciso, altrimenti il più veloce con https.
     pub fn start_connect(&mut self, only: Option<GoodProxy>) {
         if self.busy() {
@@ -294,6 +308,7 @@ impl App {
                     self.errors.extend(errs);
                 }
                 JobEvent::Tested { cand, outcome } => self.st.apply_tested(kind, &cand, &outcome, &mut self.test_stats),
+                JobEvent::Speed { key, result } => self.st.apply_speed(&key, &result),
                 JobEvent::Connected(g) => {
                     self.st.upsert_good(&g, false);
                     self.set_active(Some(g));

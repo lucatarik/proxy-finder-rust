@@ -8,11 +8,9 @@ use proxy_finder::relay;
 use proxy_finder::sources::custom_source;
 use proxy_finder::state::{round8, Part, State, TestCount, MAX_PARALLEL};
 use proxy_finder::store::{restore_default_sources, Order, SortBy, Store};
-use proxy_finder::tester::{self, Outcome, TestConfig};
+use proxy_finder::tester::{Outcome, TestConfig};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use futures::StreamExt;
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -24,10 +22,6 @@ const AUTO_WANT: usize = 10;
 const NETS_MIN_SHOW: u64 = 20;
 /// Pausa casuale (secondi) tra la scansione e la prova di velocità che sceglie il proxy.
 const AUTO_JITTER_SECS: std::ops::RangeInclusive<u64> = 3..=8;
-/// `auto --speed`: tempo massimo iniziale del download di prova (poi scende al più veloce).
-const SPEED_LIMIT: Duration = Duration::from_secs(15);
-/// `auto --speed`: download di prova contemporanei.
-const SPEED_PARALLEL: usize = 3;
 
 pub const HELP: &str = "\
 proxy-finder — trova, prova e usa proxy pubblici
@@ -46,7 +40,7 @@ COMANDI
   sources restore                    rimette le predefinite (tiene rating e personali)
   download                           scarica le sorgenti abilitate
   test [opzioni]                     prova i proxy scaricati
-  list [--all] [--json] [--sort latency|added]
+  list [--all] [--json] [--sort latency|added|speed]
   recheck                            riprova tutti i buoni
   export [FILE] [--json]             esporta i buoni funzionanti (stdout se manca FILE)
   remove <proto://ip:porta>...       rimuove dei buoni
@@ -231,6 +225,7 @@ fn parse_proxy(s: &str) -> Result<GoodProxy, String> {
         added_at: proxy_finder::model::now_secs(),
         checked_at: 0,
         alive: true,
+        speed_bps: None,
     })
 }
 
@@ -321,6 +316,7 @@ impl Ctx {
                         }
                     }
                 }
+                JobEvent::Speed { key, result } => self.st.apply_speed(&key, &result),
                 JobEvent::Connected(g) => {
                     self.st.upsert_good(&g, false);
                     connected = Some(g);
@@ -646,6 +642,7 @@ impl Ctx {
             self.st.settings.sort = match v {
                 "latency" => SortBy::Latency,
                 "added" => SortBy::Added,
+                "speed" => SortBy::Speed,
                 _ => return Err(usage(format!("ordinamento sconosciuto: {v}"))),
             };
         }
@@ -659,14 +656,15 @@ impl Ctx {
             eprintln!("nessun proxy: esegui `proxy-finder download` e `proxy-finder test`");
             return Ok(0);
         }
-        out!("{:<6} {:<28} {:>8}  {:<16} {:>5}  {:<10} SORGENTI", "PAESE", "PROXY", "LATENZA", "IP USCITA", "SCORE", "STATO");
+        out!("{:<6} {:<28} {:>8}  {:>9}  {:<16} {:>5}  {:<10} SORGENTI", "PAESE", "PROXY", "LATENZA", "DOWNLOAD", "IP USCITA", "SCORE", "STATO");
         for p in l {
             let stato = if !p.alive { "non risp." } else if p.https { "ok" } else { "SOLO HTTP" };
             out!(
-                "{} {:<28} {:>5} ms  {:<16} {:>5.0}  {:<10} {}",
+                "{} {:<28} {:>5} ms  {:>9}  {:<16} {:>5.0}  {:<10} {}",
                 cc(&p.country),
                 p.key(),
                 p.latency_ms,
+                rating::speed_text(p.speed_bps),
                 p.exit_ip,
                 p.score * 100.0,
                 stato,
@@ -949,50 +947,20 @@ impl Ctx {
         }
     }
 
-    /// `auto --speed`: scarica `tester::SPEED_URL` attraverso i proxy di `list` (ordinata per
-    /// latenza), `SPEED_PARALLEL` alla volta, con un tetto di tempo che parte da `SPEED_LIMIT` e
-    /// scende al tempo del più veloce arrivato in fondo. Restituisce il più veloce con la velocità
-    /// in byte/s; se nessuno scarica, il primo della lista senza velocità. `None` se Ctrl+C.
-    fn fastest_download(&self, mut list: Vec<GoodProxy>) -> Option<(GoodProxy, Option<f64>)> {
-        let limit_ms = AtomicU64::new(SPEED_LIMIT.as_millis() as u64);
-        let silent = self.silent;
-        let best = self.rt.block_on(async {
-            let tests = futures::stream::iter(list.iter().enumerate())
-                .map(|(i, p)| {
-                    let limit_ms = &limit_ms;
-                    async move { (i, p, tester::speed_test(p, limit_ms).await) }
-                })
-                .buffer_unordered(SPEED_PARALLEL);
-            tokio::pin!(tests);
-            let mut best: Option<(usize, tester::Speed)> = None;
-            loop {
-                tokio::select! {
-                    r = tests.next() => match r {
-                        Some((i, p, Ok(s))) => {
-                            if !silent {
-                                let note = if s.complete { "" } else { " (fermato al tetto)" };
-                                out!("  {:<28} {:>6.2} MB/s in {:.1} s{note}", p.key(), s.bytes_per_sec() / 1e6, s.secs);
-                            }
-                            // un download completo batte sempre uno fermato al tetto
-                            if best.is_none_or(|(_, b)| (s.complete, s.bytes_per_sec()) > (b.complete, b.bytes_per_sec())) {
-                                best = Some((i, s));
-                            }
-                        }
-                        Some((_, p, Err(e))) => {
-                            if !silent {
-                                eprintln!("  {:<28} scartato: {e}", p.key());
-                            }
-                        }
-                        None => return Some(best),
-                    },
-                    _ = tokio::signal::ctrl_c() => return None,
-                }
-            }
-        })?;
-        Some(match best {
-            Some((i, s)) => (list.swap_remove(i), Some(s.bytes_per_sec())),
-            None => (list.swap_remove(0), None),
-        })
+    /// `auto --speed`: speedtest dei proxy di `list` (ordinata per latenza, job Speed come nella
+    /// GUI; le velocità si salvano). Restituisce il più veloce con la velocità in byte/s; se
+    /// nessuno scarica, il primo della lista senza velocità. `None` se Ctrl+C.
+    fn fastest_download(&mut self, mut list: Vec<GoodProxy>) -> Option<(GoodProxy, Option<f64>)> {
+        let h = job::start_speed(self.rt.handle(), Self::noop(), list.clone());
+        if self.drive(h).cancelled {
+            return None;
+        }
+        // chi è stato fermato al tetto ha scaricato meno di 2 MB nel tempo in cui il più veloce li
+        // ha scaricati tutti: basta la velocità salvata per trovare il migliore
+        let speed = |p: &GoodProxy| self.st.proxies.iter().find(|q| q.key() == p.key()).and_then(|q| q.speed_bps).unwrap_or(0);
+        let best = (0..list.len()).max_by_key(|&i| (speed(&list[i]), std::cmp::Reverse(i)))?;
+        let bps = speed(&list[best]);
+        Some((list.swap_remove(best), (bps > 0).then_some(bps as f64)))
     }
 
     /// Attende `d`; true se nel frattempo arriva Ctrl+C.

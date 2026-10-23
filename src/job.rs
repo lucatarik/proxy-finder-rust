@@ -4,7 +4,7 @@
 use crate::asn::{self, AsnTable};
 use crate::model::{Candidate, GoodProxy, Source};
 use crate::sources::{exclude_known, fetch_all, http_client, merge};
-use crate::tester::{real_ip, test_one, test_pool, Outcome, TestConfig};
+use crate::tester::{real_ip, speed_pool, test_one, test_pool, Outcome, Speed, TestConfig};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
@@ -18,6 +18,7 @@ pub enum JobKind {
     Recheck,
     Connect,
     VerifyIp,
+    Speed,
 }
 
 impl JobKind {
@@ -28,6 +29,7 @@ impl JobKind {
             JobKind::Recheck => "Ricontrollo",
             JobKind::Connect => "Connessione",
             JobKind::VerifyIp => "Verifica IP",
+            JobKind::Speed => "Speedtest",
         }
     }
 }
@@ -44,6 +46,8 @@ pub enum JobEvent {
     AsnTable { table: Arc<AsnTable>, gz: Arc<Vec<u8>> },
     /// Esito della prova di un candidato.
     Tested { cand: Candidate, outcome: Outcome },
+    /// Esito dello speedtest di un proxy buono.
+    Speed { key: String, result: Result<Speed, String> },
     /// Proxy scelto dalla connessione, appena riverificato.
     Connected(GoodProxy),
     RealIp(String),
@@ -216,6 +220,42 @@ pub fn start_test(rt: &Handle, repaint: Repaint, cands: Vec<Candidate>, cfg: Tes
 pub fn start_recheck(rt: &Handle, repaint: Repaint, proxies: Vec<GoodProxy>, cfg: TestConfig, real_ip: Option<String>) -> JobHandle {
     let cands = proxies.iter().map(GoodProxy::as_candidate).collect();
     run_pool(rt, repaint, JobKind::Recheck, cands, cfg, real_ip)
+}
+
+/// Speedtest dei proxy dati (vedi `tester::speed_pool`): misura la velocità di download, non
+/// tocca rating né latenza.
+pub fn start_speed(rt: &Handle, repaint: Repaint, proxies: Vec<GoodProxy>) -> JobHandle {
+    spawn(rt, repaint, JobKind::Speed, move |tx, cancel| async move {
+        let total = proxies.len();
+        let (mut done, mut best): (usize, Option<(String, Speed)>) = (0, None);
+        tx.send(JobEvent::Progress { done, total, found: 0, phase: "speedtest".into() });
+        speed_pool(proxies, &cancel, |p, r| {
+            done += 1;
+            let key = p.key();
+            tx.send(JobEvent::Log(match &r {
+                Ok(s) => format!(
+                    "OK   {key}  {:.2} MB/s in {:.1} s{}",
+                    s.bytes_per_sec() / 1e6,
+                    s.secs,
+                    if s.complete { "" } else { " (fermato al tetto)" }
+                ),
+                Err(e) => format!("KO   {key}  scartato: {e}"),
+            }));
+            if let Ok(s) = &r {
+                if best.as_ref().is_none_or(|(_, b)| crate::tester::faster(s, b)) {
+                    best = Some((key.clone(), *s));
+                }
+            }
+            tx.send(JobEvent::Speed { key, result: r });
+            tx.send(JobEvent::Progress { done, total, found: 0, phase: "speedtest".into() });
+        })
+        .await;
+        let summary = match &best {
+            Some((k, s)) => format!("{done}/{total} misurati · il più veloce: {k} ({:.2} MB/s)", s.bytes_per_sec() / 1e6),
+            None => format!("{done}/{total} misurati · nessun download riuscito"),
+        };
+        tx.finish(JobKind::Speed, summary, cancel.is_cancelled());
+    })
 }
 
 /// Riverifica i proxy nell'ordine dato, 8 alla volta, e si ferma al primo che risponde.

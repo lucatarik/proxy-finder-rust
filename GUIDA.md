@@ -27,13 +27,20 @@ Richiede Rust 1.82+. Su Linux servono le librerie di X11 o Wayland (eframe con b
 
 ### Proxy
 I proxy verificati: paese (bandiera e codice ISO a 3 lettere), `ip:porta`, tipo, latenza colorata (verde < 300 ms, gialla < 1000 ms,
-rossa oltre), IP di uscita, score, sorgenti che lo elencano, ultima verifica.
+rossa oltre), velocità di download dell'ultimo speedtest, IP di uscita, score, sorgenti che lo
+elencano, ultima verifica. Si ordina per latenza, velocità o data di aggiunta.
 
 - click sull'indirizzo: il proxy viene **riverificato** e, solo se risponde, diventa quello del
   relay; se non risponde viene marcato **non risponde**;
 - **Connetti al più veloce** (in alto): riverifica i proxy https in ordine di latenza, 8 alla volta,
   e si collega al primo che risponde. I "solo http" non vengono mai scelti in automatico;
 - **Ricontrolla** rimette alla prova tutti i buoni; **Elimina non funzionanti (n)**;
+- **Speedtest (n)**: scarica 2 MB (`speed.cloudflare.com`) attraverso ogni proxy funzionante con
+  https, 3 alla volta. Il tetto parte da 15 secondi e, appena un proxy finisce, scende al suo
+  tempo: chi lo supera viene fermato e mostra la velocità tenuta fin lì, chi non ha scaricato
+  niente risulta **scartato**. La velocità resta salvata (anche dopo un Ricontrolla) finché non
+  rifai lo speedtest; "—" = mai misurata. Non tocca rating né latenza. Anche `--auto --speed`
+  salva le velocità che misura;
 - **Copia tutti** e **Esporta** in `.txt` (`proto://ip:porta`, uno per riga) o `.json`.
 
 I proxy che reggono l'http ma non `CONNECT` hanno il badge rosso **SOLO HTTP**: connessi a uno di

@@ -109,9 +109,11 @@ proxy-finder test -n 256 -j 128 -p socks5 -c IT,DE -t normali
 proxy-finder test --order random --drop-http-only --save
 ```
 
-### `list [--all] [--json] [--sort latency|added]`
-Proxy buoni: paese (bandiera e codice a 3 lettere), `proto://ip:porta`, latenza, IP di uscita, score, stato (`ok`, `SOLO HTTP`,
-`non risp.`), sorgenti. Di default solo quelli funzionanti, i più veloci prima. `--all` include
+### `list [--all] [--json] [--sort latency|added|speed]`
+Proxy buoni: paese (bandiera e codice a 3 lettere), `proto://ip:porta`, latenza, velocità di download dell'ultimo
+speedtest (`—` mai misurata, `scartato` se fermato senza aver scaricato niente), IP di uscita, score, stato (`ok`,
+`SOLO HTTP`, `non risp.`), sorgenti. Di default solo quelli funzionanti, i più veloci prima; `--sort speed` mette prima
+i più veloci in download (le velocità le misura lo Speedtest della GUI o `auto --speed`). `--all` include
 quelli che non rispondono; `--json` stampa i dati completi.
 
 ### `recheck`
@@ -200,7 +202,8 @@ Trova un proxy nuovo e ci collega il relay, senza altri passaggi:
    più veloce in download. Il tempo comprende connessione e TLS. Il tetto parte da 15 secondi e,
    appena un proxy finisce i 2 MB, scende al suo tempo: chi lo supera viene fermato e scartato,
    perché sarebbe comunque più lento. Se nessuno finisce entro 15 secondi vince chi ha scaricato
-   di più; se nessuno scarica niente, usa quello che risponde prima;
+   di più; se nessuno scarica niente, usa quello che risponde prima. Le velocità misurate si
+   salvano (colonna DOWNLOAD di `list`, ordinabile con `--sort speed`);
 6. avvia il relay verso il proxy verificato, come `relay`.
 
 Esiti, rating delle sorgenti, storico e proxy buoni si salvano come con `test` (la verifica del
