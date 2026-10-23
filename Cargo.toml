@@ -1,0 +1,32 @@
+[package]
+name = "proxy-finder"
+version = "0.1.11"
+edition = "2021"
+
+[lib]
+name = "proxy_finder"
+path = "src/lib.rs"
+
+[[bin]]
+name = "proxy-finder"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process"] }
+tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks", "gzip"] }
+tokio-socks = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+anyhow = "1"
+rand = "0.8"
+futures = "0.3"
+# già presente tramite eframe: decodifica l'atlante delle bandiere
+image = { version = "0.25", default-features = false, features = ["png"] }
+# icona nel vassoio di sistema (StatusNotifierItem), comando `tray`
+ksni = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

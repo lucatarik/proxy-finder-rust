@@ -1,0 +1,13 @@
+target/
+orchestra/__pycache__/
+docs/agent-work/**/*.jsonl
+docs/agent-work/**/*.status.json
+
+# file di sviluppo locali, fuori dal repository pubblico
+/AGENTS.md
+/CLAUDE.md
+/handoff.md
+/docs/
+/orchestra/
+/.claude/
+/README (Copy).md
