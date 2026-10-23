@@ -254,7 +254,7 @@ impl App {
             self.errors.push("nessun proxy https funzionante da misurare".into());
             return;
         }
-        let h = job::start_speed(self.rt.handle(), self.repaint.clone(), list);
+        let h = job::start_speed(self.rt.handle(), self.repaint.clone(), list, false);
         self.begin(h);
     }
 

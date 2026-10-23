@@ -951,7 +951,7 @@ impl Ctx {
     /// GUI; le velocità si salvano). Restituisce il più veloce con la velocità in byte/s; se
     /// nessuno scarica, il primo della lista senza velocità. `None` se Ctrl+C.
     fn fastest_download(&mut self, mut list: Vec<GoodProxy>) -> Option<(GoodProxy, Option<f64>)> {
-        let h = job::start_speed(self.rt.handle(), Self::noop(), list.clone());
+        let h = job::start_speed(self.rt.handle(), Self::noop(), list.clone(), true);
         if self.drive(h).cancelled {
             return None;
         }

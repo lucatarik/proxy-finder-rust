@@ -222,14 +222,14 @@ pub fn start_recheck(rt: &Handle, repaint: Repaint, proxies: Vec<GoodProxy>, cfg
     run_pool(rt, repaint, JobKind::Recheck, cands, cfg, real_ip)
 }
 
-/// Speedtest dei proxy dati (vedi `tester::speed_pool`): misura la velocità di download, non
-/// tocca rating né latenza.
-pub fn start_speed(rt: &Handle, repaint: Repaint, proxies: Vec<GoodProxy>) -> JobHandle {
+/// Speedtest dei proxy dati (vedi `tester::speed_pool`, anche per `shrink`): misura la velocità
+/// di download, non tocca rating né latenza.
+pub fn start_speed(rt: &Handle, repaint: Repaint, proxies: Vec<GoodProxy>, shrink: bool) -> JobHandle {
     spawn(rt, repaint, JobKind::Speed, move |tx, cancel| async move {
         let total = proxies.len();
         let (mut done, mut best): (usize, Option<(String, Speed)>) = (0, None);
         tx.send(JobEvent::Progress { done, total, found: 0, phase: "speedtest".into() });
-        speed_pool(proxies, &cancel, |p, r| {
+        speed_pool(proxies, shrink, &cancel, |p, r| {
             done += 1;
             let key = p.key();
             tx.send(JobEvent::Log(match &r {

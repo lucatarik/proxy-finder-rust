@@ -17,7 +17,7 @@ impl App {
             let n_speed = self.st.proxies.iter().filter(|p| p.alive && p.https).count();
             if ui
                 .add_enabled(!busy && n_speed > 0, egui::Button::new(format!("Speedtest ({n_speed})")))
-                .on_hover_text("Scarica 2 MB attraverso ogni proxy funzionante con https, 3 alla volta. Il tetto parte da 15 s e scende al tempo del più veloce: chi lo supera viene fermato.")
+                .on_hover_text("Scarica 2 MB attraverso ogni proxy funzionante con https, 3 alla volta, al più 15 s ciascuno, e salva la velocità di tutti.")
                 .clicked()
             {
                 self.start_speed();

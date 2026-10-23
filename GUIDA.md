@@ -36,11 +36,12 @@ elencano, ultima verifica. Si ordina per latenza, velocità o data di aggiunta.
   e si collega al primo che risponde. I "solo http" non vengono mai scelti in automatico;
 - **Ricontrolla** rimette alla prova tutti i buoni; **Elimina non funzionanti (n)**;
 - **Speedtest (n)**: scarica 2 MB (`speed.cloudflare.com`) attraverso ogni proxy funzionante con
-  https, 3 alla volta. Il tetto parte da 15 secondi e, appena un proxy finisce, scende al suo
-  tempo: chi lo supera viene fermato e mostra la velocità tenuta fin lì, chi non ha scaricato
-  niente risulta **scartato**. La velocità resta salvata (anche dopo un Ricontrolla) finché non
+  https, 3 alla volta, e salva la velocità di tutti. Ogni proxy ha al più 15 secondi: chi non
+  finisce in tempo mostra la velocità tenuta fin lì, chi non ha scaricato niente risulta
+  **scartato**. La velocità resta salvata (anche dopo un Ricontrolla) finché non
   rifai lo speedtest; "—" = mai misurata. Non tocca rating né latenza. Anche `--auto --speed`
-  salva le velocità che misura;
+  salva le velocità che misura, ma lì il tetto scende al tempo del più veloce (serve solo a
+  sceglierne uno), quindi i più lenti hanno valori parziali;
 - **Copia tutti** e **Esporta** in `.txt` (`proto://ip:porta`, uno per riga) o `.json`.
 
 I proxy che reggono l'http ma non `CONNECT` hanno il badge rosso **SOLO HTTP**: connessi a uno di

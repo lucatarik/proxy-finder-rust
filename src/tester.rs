@@ -347,9 +347,9 @@ impl Speed {
 }
 
 /// Scarica `SPEED_URL` attraverso `p`. Il tempo parte dalla richiesta (connessione e TLS
-/// comprese). `limit_ms` è il tetto condiviso fra le prove in parallelo: chi finisce lo abbassa al
-/// proprio tempo, e chi lo supera si ferma subito (sarebbe comunque più lento). Una prova fermata
-/// dal tetto restituisce quanto è arrivato (`complete: false`); errore se non arriva niente.
+/// comprese). `limit_ms` è il tetto di tempo, letto di continuo perché `speed_pool` può abbassarlo
+/// mentre la prova è in corso. Una prova fermata dal tetto restituisce quanto è arrivato
+/// (`complete: false`); errore se non arriva niente.
 pub async fn speed_test(p: &GoodProxy, limit_ms: &AtomicU64) -> Result<Speed, String> {
     let client = client_for(&p.key())?;
     let t0 = Instant::now();
@@ -357,7 +357,7 @@ pub async fn speed_test(p: &GoodProxy, limit_ms: &AtomicU64) -> Result<Speed, St
     // il tetto può scendere mentre si aspetta: si ricontrolla almeno ogni 200 ms
     let tick = || tokio::time::sleep_until(deadline().min(Instant::now() + Duration::from_millis(200)).into());
     let speed = |bytes, complete| Speed { bytes, secs: t0.elapsed().as_secs_f64(), complete };
-    let slower = || Err("più lento del più veloce".to_string());
+    let slower = || Err(format!("nessun dato in {:.1} s", t0.elapsed().as_secs_f64()));
 
     let send = client.get(SPEED_URL).send();
     tokio::pin!(send);
@@ -386,15 +386,20 @@ pub async fn speed_test(p: &GoodProxy, limit_ms: &AtomicU64) -> Result<Speed, St
             _ = tick() => {}
         }
     }
-    let s = speed(got, true);
-    limit_ms.fetch_min((s.secs * 1000.0).ceil() as u64, Ordering::Relaxed);
-    Ok(s)
+    Ok(speed(got, true))
 }
 
-/// Speedtest di `list`, `SPEED_PARALLEL` alla volta, con un tetto condiviso che parte da
-/// `SPEED_LIMIT` e scende al tempo del più veloce arrivato in fondo (vedi `speed_test`).
+/// Speedtest di `list`, `SPEED_PARALLEL` alla volta, ciascuno con un tetto di `SPEED_LIMIT`.
+/// Con `shrink` (scelta del più veloce in `auto --speed`) il tetto è condiviso e scende al tempo
+/// del più veloce arrivato in fondo: chi lo supera si ferma subito, perché sarebbe comunque più
+/// lento. Senza (speedtest della GUI) ognuno ha i suoi 15 s pieni.
 /// `on_result` riceve ogni esito appena arriva. Si ferma con `cancel`.
-pub async fn speed_pool(list: Vec<GoodProxy>, cancel: &CancellationToken, mut on_result: impl FnMut(&GoodProxy, Result<Speed, String>)) {
+pub async fn speed_pool(
+    list: Vec<GoodProxy>,
+    shrink: bool,
+    cancel: &CancellationToken,
+    mut on_result: impl FnMut(&GoodProxy, Result<Speed, String>),
+) {
     let limit_ms = std::sync::Arc::new(AtomicU64::new(SPEED_LIMIT.as_millis() as u64));
     let mut tests = futures::stream::iter(list)
         .map(|p| {
@@ -408,7 +413,14 @@ pub async fn speed_pool(list: Vec<GoodProxy>, cancel: &CancellationToken, mut on
     loop {
         tokio::select! {
             r = tests.next() => match r {
-                Some((p, r)) => on_result(&p, r),
+                Some((p, r)) => {
+                    if let (true, Ok(s)) = (shrink, &r) {
+                        if s.complete {
+                            limit_ms.fetch_min((s.secs * 1000.0).ceil() as u64, Ordering::Relaxed);
+                        }
+                    }
+                    on_result(&p, r)
+                }
                 None => return,
             },
             _ = cancel.cancelled() => return,
