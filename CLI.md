@@ -202,8 +202,9 @@ Trova un proxy nuovo e ci collega il relay, senza altri passaggi:
    più veloce in download. Il tempo comprende connessione e TLS. Il tetto parte da 15 secondi e,
    appena un proxy finisce i 2 MB, scende al suo tempo: chi lo supera viene fermato e scartato,
    perché sarebbe comunque più lento. Se nessuno finisce entro 15 secondi vince chi ha scaricato
-   di più; se nessuno scarica niente, usa quello che risponde prima. Le velocità misurate si
-   salvano (colonna DOWNLOAD di `list`, ordinabile con `--sort speed`);
+   di più; se nessuno scarica niente, usa quello che risponde prima. Si salva la velocità di chi
+   ha finito i 2 MB (colonna DOWNLOAD di `list`, ordinabile con `--sort speed`); chi è stato
+   fermato è scartato e tiene la velocità di prima;
 6. avvia il relay verso il proxy verificato, come `relay`.
 
 Esiti, rating delle sorgenti, storico e proxy buoni si salvano come con `test` (la verifica del

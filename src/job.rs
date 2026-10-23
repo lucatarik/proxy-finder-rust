@@ -46,8 +46,10 @@ pub enum JobEvent {
     AsnTable { table: Arc<AsnTable>, gz: Arc<Vec<u8>> },
     /// Esito della prova di un candidato.
     Tested { cand: Candidate, outcome: Outcome },
-    /// Esito dello speedtest di un proxy buono.
-    Speed { key: String, result: Result<Speed, String> },
+    /// Esito dello speedtest di un proxy buono. `save`: va salvato (con `shrink` solo chi ha
+    /// finito i 2 MB: chi è stato fermato dal tetto del più veloce è scartato e non sovrascrive
+    /// la velocità misurata prima).
+    Speed { key: String, result: Result<Speed, String>, save: bool },
     /// Proxy scelto dalla connessione, appena riverificato.
     Connected(GoodProxy),
     RealIp(String),
@@ -246,7 +248,8 @@ pub fn start_speed(rt: &Handle, repaint: Repaint, proxies: Vec<GoodProxy>, shrin
                     best = Some((key.clone(), *s));
                 }
             }
-            tx.send(JobEvent::Speed { key, result: r });
+            let save = !shrink || matches!(&r, Ok(s) if s.complete);
+            tx.send(JobEvent::Speed { key, result: r, save });
             tx.send(JobEvent::Progress { done, total, found: 0, phase: "speedtest".into() });
         })
         .await;

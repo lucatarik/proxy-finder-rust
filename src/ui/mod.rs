@@ -308,7 +308,11 @@ impl App {
                     self.errors.extend(errs);
                 }
                 JobEvent::Tested { cand, outcome } => self.st.apply_tested(kind, &cand, &outcome, &mut self.test_stats),
-                JobEvent::Speed { key, result } => self.st.apply_speed(&key, &result),
+                JobEvent::Speed { key, result, save } => {
+                    if save {
+                        self.st.apply_speed(&key, &result);
+                    }
+                }
                 JobEvent::Connected(g) => {
                     self.st.upsert_good(&g, false);
                     self.set_active(Some(g));

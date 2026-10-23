@@ -40,8 +40,8 @@ elencano, ultima verifica. Si ordina per latenza, velocità o data di aggiunta.
   finisce in tempo mostra la velocità tenuta fin lì, chi non ha scaricato niente risulta
   **scartato**. La velocità resta salvata (anche dopo un Ricontrolla) finché non
   rifai lo speedtest; "—" = mai misurata. Non tocca rating né latenza. Anche `--auto --speed`
-  salva le velocità che misura, ma lì il tetto scende al tempo del più veloce (serve solo a
-  sceglierne uno), quindi i più lenti hanno valori parziali;
+  misura, ma lì il tetto scende al tempo del più veloce (serve solo a sceglierne uno): salva
+  chi finisce i 2 MB, mentre chi viene fermato è scartato e tiene la velocità che aveva;
 - **Copia tutti** e **Esporta** in `.txt` (`proto://ip:porta`, uno per riga) o `.json`.
 
 I proxy che reggono l'http ma non `CONNECT` hanno il badge rosso **SOLO HTTP**: connessi a uno di

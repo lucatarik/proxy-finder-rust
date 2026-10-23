@@ -8,7 +8,7 @@ use proxy_finder::relay;
 use proxy_finder::sources::custom_source;
 use proxy_finder::state::{round8, Part, State, TestCount, MAX_PARALLEL};
 use proxy_finder::store::{restore_default_sources, Order, SortBy, Store};
-use proxy_finder::tester::{Outcome, TestConfig};
+use proxy_finder::tester::{self, Outcome, TestConfig};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -106,6 +106,8 @@ struct Driven {
     found: Vec<GoodProxy>,
     /// Errori segnalati dal job (in modalità `silent` non vengono stampati).
     errors: Vec<String>,
+    /// Velocità misurate da questo job Speed, salvate o no.
+    speeds: Vec<(String, tester::Speed)>,
 }
 
 struct Ctx {
@@ -283,6 +285,7 @@ impl Ctx {
         let mut connected = None;
         let mut found: Vec<GoodProxy> = Vec::new();
         let mut errors = Vec::new();
+        let mut speeds = Vec::new();
         let mut last_progress = std::time::Instant::now();
         for e in h.rx.iter() {
             match e {
@@ -316,7 +319,14 @@ impl Ctx {
                         }
                     }
                 }
-                JobEvent::Speed { key, result } => self.st.apply_speed(&key, &result),
+                JobEvent::Speed { key, result, save } => {
+                    if save {
+                        self.st.apply_speed(&key, &result);
+                    }
+                    if let Ok(s) = result {
+                        speeds.push((key, s));
+                    }
+                }
                 JobEvent::Connected(g) => {
                     self.st.upsert_good(&g, false);
                     connected = Some(g);
@@ -347,7 +357,7 @@ impl Ctx {
         for e in self.st.finish(h.kind) {
             eprintln!("errore: {e}");
         }
-        Driven { cancelled, count, connected, found, errors }
+        Driven { cancelled, count, connected, found, errors, speeds }
     }
 
     fn noop() -> Repaint {
@@ -947,20 +957,25 @@ impl Ctx {
         }
     }
 
-    /// `auto --speed`: speedtest dei proxy di `list` (ordinata per latenza, job Speed come nella
-    /// GUI; le velocità si salvano). Restituisce il più veloce con la velocità in byte/s; se
-    /// nessuno scarica, il primo della lista senza velocità. `None` se Ctrl+C.
+    /// `auto --speed`: speedtest dei proxy di `list` (ordinata per latenza) col tetto che scende al
+    /// tempo del più veloce; si salvano solo i download completi. Restituisce il migliore di questo
+    /// giro con la velocità in byte/s; se nessuno scarica, il primo della lista senza velocità.
+    /// `None` se Ctrl+C.
     fn fastest_download(&mut self, mut list: Vec<GoodProxy>) -> Option<(GoodProxy, Option<f64>)> {
         let h = job::start_speed(self.rt.handle(), Self::noop(), list.clone(), true);
-        if self.drive(h).cancelled {
+        let d = self.drive(h);
+        if d.cancelled {
             return None;
         }
-        // chi è stato fermato al tetto ha scaricato meno di 2 MB nel tempo in cui il più veloce li
-        // ha scaricati tutti: basta la velocità salvata per trovare il migliore
-        let speed = |p: &GoodProxy| self.st.proxies.iter().find(|q| q.key() == p.key()).and_then(|q| q.speed_bps).unwrap_or(0);
-        let best = (0..list.len()).max_by_key(|&i| (speed(&list[i]), std::cmp::Reverse(i)))?;
-        let bps = speed(&list[best]);
-        Some((list.swap_remove(best), (bps > 0).then_some(bps as f64)))
+        let best = d
+            .speeds
+            .iter()
+            .reduce(|a, b| if tester::faster(&b.1, &a.1) { b } else { a })
+            .and_then(|(k, s)| list.iter().position(|p| &p.key() == k).map(|i| (i, s.bytes_per_sec())));
+        Some(match best {
+            Some((i, bps)) => (list.swap_remove(i), Some(bps)),
+            None => (list.swap_remove(0), None),
+        })
     }
 
     /// Attende `d`; true se nel frattempo arriva Ctrl+C.
