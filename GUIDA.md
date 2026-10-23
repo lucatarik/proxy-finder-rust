@@ -176,8 +176,8 @@ curl -x http://127.0.0.1:8899 https://api.ipify.org
 | clarketm | clarketm/proxy-list | ip:porta | |
 | prxchk | prxchk/proxy-list | ip:porta | lista corta |
 | anonym0us | Anonym0usWork1221/Free-Proxies | ip:porta | |
-| tuanminpay | TuanMinPay/live-proxy | ip:porta | disabilitata: liste enormi |
-| ercindedeoglu | ErcinDedeoglu/proxies | ip:porta | disabilitata: liste enormi |
+| tuanminpay | TuanMinPay/live-proxy | ip:porta | liste enormi (socks5 ~80.000) |
+| ercindedeoglu | ErcinDedeoglu/proxies | ip:porta | liste enormi; `https.txt` dichiarato https |
 
 Tutte verificate (HTTP 200) il 2026-10-19. Esclusi: casals-ar (9 MB), MuRongPIG (http e socks5
 identici), SevenworksDev (IP anycast Cloudflare), mmpx12 e ALIILAPRO (rate limit), KangProxy e

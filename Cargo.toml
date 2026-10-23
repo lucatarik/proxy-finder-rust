@@ -1,7 +1,8 @@
 [package]
 name = "proxy-finder"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "proxy_finder"

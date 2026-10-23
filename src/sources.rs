@@ -98,10 +98,11 @@ pub fn default_sources() -> Vec<Source> {
             vec![ep(format!("{R}/prxchk/proxy-list/main/http.txt"), IpPort, Some(Http))]),
         src("anonym0us", "Anonym0usWork1221 / Free-Proxies", &gh("Anonym0usWork1221/Free-Proxies"), Q2, true,
             per_proto(IpPort, |f| format!("{R}/Anonym0usWork1221/Free-Proxies/main/proxy_files/{f}_proxies.txt"), &HTTP_S4_S5)),
-        src("tuanminpay", "TuanMinPay / live-proxy", &gh("TuanMinPay/live-proxy"), Q2, false,
+        src("tuanminpay", "TuanMinPay / live-proxy", &gh("TuanMinPay/live-proxy"), Q2, true,
             per_proto(IpPort, |f| format!("{R}/TuanMinPay/live-proxy/master/{f}.txt"), &HTTP_S4_S5)),
-        src("ercindedeoglu", "ErcinDedeoglu / proxies", &gh("ErcinDedeoglu/proxies"), Q2, false,
-            per_proto(IpPort, |f| format!("{R}/ErcinDedeoglu/proxies/main/proxies/{f}.txt"), &HTTP_S4_S5)),
+        src("ercindedeoglu", "ErcinDedeoglu / proxies", &gh("ErcinDedeoglu/proxies"), Q2, true,
+            per_proto(IpPort, |f| format!("{R}/ErcinDedeoglu/proxies/main/proxies/{f}.txt"),
+                &[("http", Http), ("https", Http), ("socks4", Socks4), ("socks5", Socks5)])),
     ]
 }
 

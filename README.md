@@ -15,5 +15,7 @@ cargo build --release        # binary: target/release/proxy-finder
 Requires Rust 1.82+ and, on Linux, X11 or Wayland libraries. Detailed docs (in Italian):
 [GUIDA.md](GUIDA.md) for the GUI and source rating, [CLI.md](CLI.md) for the command line.
 
+Licensed under the [MIT License](LICENSE).
+
 Public proxies can see and alter unencrypted traffic: do not use them for banking, passwords or
 payments.
