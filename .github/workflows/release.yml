@@ -1,0 +1,60 @@
+# Compila Linux, macOS e Windows. Alla pubblicazione di una release allega i binari;
+# avviato a mano (workflow_dispatch) compila soltanto e lascia gli archivi come artifact.
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+          - os: macos-latest
+            name: macos-arm64
+          - os: windows-latest
+            name: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --release
+      - run: cargo build --release
+
+      - name: Archivio
+        shell: bash
+        run: |
+          dir=proxy-finder-${{ matrix.name }}
+          mkdir "$dir"
+          cp README.md LICENSE "$dir"/
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp target/release/proxy-finder.exe "$dir"/
+            7z a "$dir.zip" "$dir" >/dev/null
+            echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+          else
+            cp target/release/proxy-finder "$dir"/
+            tar czf "$dir.tar.gz" "$dir"
+            echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proxy-finder-${{ matrix.name }}
+          path: ${{ env.ASSET }}
+
+      - name: Allega alla release
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ASSET" --clobber

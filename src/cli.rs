@@ -56,7 +56,7 @@ COMANDI
                                      avvia il relay; se un relay da riga di comando è già attivo
                                      su quella porta, gli cambia il proxy. Stampa solo l'IP di
                                      uscita (tutto il resto con -v)
-  tray [--port N]                    icona nel vassoio di sistema: Collega (come --auto, e imposta
+  tray [--port N]                    (solo Linux) icona nel vassoio di sistema: Collega (come --auto, e imposta
                                      il proxy di sistema GNOME), Cambia proxy, Scollega
   gui                                apre la GUI
   help                               questo testo
@@ -854,12 +854,18 @@ impl Ctx {
     }
 
     /// Icona nel vassoio di sistema per collegarsi e scollegarsi (vedi `tray.rs`).
+    #[cfg(target_os = "linux")]
     fn tray(&mut self, args: &[String]) -> Res {
         let port = match opt(args, "--port", "")? {
             Some(p) => p.parse().map_err(|_| usage(format!("porta non valida: {p}")))?,
             None => self.st.settings.relay_port,
         };
         Ok(self.rt.block_on(crate::tray::run(port)))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn tray(&mut self, _args: &[String]) -> Res {
+        Err(usage("il vassoio di sistema è disponibile solo su Linux"))
     }
 
     /// Modalità automatica: prova proxy nuovi a lotti di `AUTO_BATCH`, prima i socks5 e quelli

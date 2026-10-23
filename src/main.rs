@@ -1,4 +1,5 @@
 mod cli;
+#[cfg(target_os = "linux")]
 mod tray;
 mod ui;
 

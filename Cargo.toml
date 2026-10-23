@@ -1,6 +1,6 @@
 [package]
 name = "proxy-finder"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 license = "MIT"
 
@@ -26,10 +26,12 @@ rand = "0.8"
 futures = "0.3"
 # già presente tramite eframe: decodifica l'atlante delle bandiere
 image = { version = "0.25", default-features = false, features = ["png"] }
-# icona nel vassoio di sistema (StatusNotifierItem), comando `tray`
-ksni = "0.3"
 # già presente tramite reqwest/image: decomprime la tabella IP -> ASN (ip2asn-v4.tsv.gz)
 flate2 = "1"
+
+# icona nel vassoio di sistema (StatusNotifierItem su D-Bus), comando `tray`: solo Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

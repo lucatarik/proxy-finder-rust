@@ -224,7 +224,7 @@ ritorna: per leggere l'IP lancialo in background con l'output su file. Il second
 proxy all'istanza già attiva, esce subito e lì `ip=$(proxy-finder --auto)` funziona.
 
 ### `tray [--port N]`
-Icona nel vassoio di sistema (StatusNotifierItem: LXQt, KDE, XFCE con il plugin, GNOME con
+Solo Linux: su Windows e macOS il comando esce con un errore. Icona nel vassoio di sistema (StatusNotifierItem: LXQt, KDE, XFCE con il plugin, GNOME con
 l'estensione AppIndicator). Il pallino cambia colore: grigio scollegato, giallo ricerca in corso,
 verde collegato, rosso errore. Il suggerimento mostra l'IP di uscita. Menu:
 

@@ -76,7 +76,7 @@ Porta del relay, **Verifica IP** (IP reale e IP visto attraverso il proxy attivo
 
 ## Icona nel vassoio
 
-`proxy-finder tray` mette un'icona nel vassoio di sistema con **Collega**, **Cambia proxy** e
+Solo Linux. `proxy-finder tray` mette un'icona nel vassoio di sistema con **Collega**, **Cambia proxy** e
 **Scollega**: trova e verifica un proxy come `--auto`, avvia il relay e imposta il proxy di
 sistema GNOME (lo segue Firefox con "Usa le impostazioni proxy del sistema"). Dettagli in
 `CLI.md`.

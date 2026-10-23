@@ -6,6 +6,14 @@ provider network (ASN) and /24 by how many good proxies it yields, and tests the
 first. A local relay on `127.0.0.1:8899` routes any program through the proxy you pick;
 `proxy-finder --auto` finds, verifies and connects to the fastest one by itself.
 
+Prebuilt binaries for Linux (x86_64), macOS (Apple Silicon) and Windows (x86_64) are on the
+[Releases](https://github.com/lucatarik/proxy-finder-rust/releases) page. GUI, CLI and relay work
+on all three; the system tray icon (`proxy-finder tray`) is Linux only, because it uses the
+D-Bus StatusNotifierItem protocol and GNOME's proxy settings. The macOS binary is unsigned: run
+`xattr -d com.apple.quarantine proxy-finder` once before starting it.
+
+Build from source:
+
 ```bash
 cargo build --release        # binary: target/release/proxy-finder
 ./proxy-finder.sh            # GUI (egui)
