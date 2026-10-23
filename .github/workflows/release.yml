@@ -48,6 +48,7 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
         with:
           name: proxy-finder-${{ matrix.name }}
           path: ${{ env.ASSET }}
