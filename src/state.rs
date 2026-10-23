@@ -1,13 +1,16 @@
 //! Stato persistente (sorgenti, buoni, lista scaricata, storico, impostazioni) e regole per
 //! applicare gli esiti dei job. Condiviso da GUI e CLI, così si comportano allo stesso modo.
 
+use crate::asn::AsnTable;
 use crate::job::JobKind;
-use crate::model::{now_secs, Candidate, GoodProxy, Source};
+use crate::model::{now_secs, Candidate, GoodProxy, NetStats, Source};
 use crate::rating;
 use crate::store::{Order, Settings, SortBy, Store};
 use crate::tester::Outcome;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
+use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 pub struct State {
     pub store: Option<Store>,
@@ -16,6 +19,10 @@ pub struct State {
     pub candidates: Vec<Candidate>,
     pub history: HashSet<String>,
     pub settings: Settings,
+    /// Rating per rete (ASN e /24).
+    pub net: NetStats,
+    /// Tabella IP -> ASN; senza, il rating per rete usa solo le /24.
+    pub asn: Option<Arc<AsnTable>>,
 }
 
 /// Conteggi di un test: provati, buoni, aggiunti (nuovi tra i buoni).
@@ -33,9 +40,10 @@ pub enum Part {
     Candidates,
     History,
     Settings,
+    Net,
 }
 
-pub const ALL_PARTS: [Part; 5] = [Part::Sources, Part::Proxies, Part::Candidates, Part::History, Part::Settings];
+pub const ALL_PARTS: [Part; 6] = [Part::Sources, Part::Proxies, Part::Candidates, Part::History, Part::Settings, Part::Net];
 
 impl State {
     /// Carica dallo store (o dai default se manca). I candidati già nello storico vengono tolti:
@@ -48,6 +56,8 @@ impl State {
                 candidates: s.load_candidates(),
                 history: s.load_history(),
                 settings: s.load_settings(),
+                net: s.load_net(),
+                asn: s.load_asn().map(Arc::new),
                 store: None,
             },
             None => State {
@@ -56,6 +66,8 @@ impl State {
                 candidates: Vec::new(),
                 history: HashSet::new(),
                 settings: Settings::default(),
+                net: NetStats::default(),
+                asn: None,
                 store: None,
             },
         };
@@ -77,6 +89,7 @@ impl State {
                     Part::Candidates => s.save_candidates(&self.candidates),
                     Part::History => s.save_history(&self.history),
                     Part::Settings => s.save_settings(&self.settings),
+                    Part::Net => s.save_net(&self.net),
                 };
                 r.err().map(|e| format!("salvataggio {p:?}: {e}"))
             })
@@ -148,6 +161,8 @@ impl State {
         match kind {
             JobKind::Test => {
                 rating::apply_outcome(&mut self.sources, cand, outcome);
+                let asn = self.asn_of(cand.ip);
+                rating::apply_net_outcome(&mut self.net, asn, cand.ip, outcome);
                 self.history.insert(cand.key());
                 count.tested += 1;
                 if let Outcome::Good(g) = outcome {
@@ -184,10 +199,29 @@ impl State {
             JobKind::Test => {
                 let h = &self.history;
                 self.candidates.retain(|c| !h.contains(&c.key()));
-                self.save(&[Part::Sources, Part::Proxies, Part::Candidates, Part::History])
+                self.save(&[Part::Sources, Part::Proxies, Part::Candidates, Part::History, Part::Net])
             }
             JobKind::Recheck | JobKind::Connect => self.save(&[Part::Proxies]),
             JobKind::VerifyIp => Vec::new(),
+        }
+    }
+
+    pub fn asn_of(&self, ip: Ipv4Addr) -> Option<u32> {
+        self.asn.as_ref().and_then(|t| t.lookup(ip))
+    }
+
+    /// La tabella ASN manca o è più vecchia di `asn::MAX_AGE`: il prossimo download la riscarica.
+    pub fn asn_stale(&self) -> bool {
+        let Some(s) = &self.store else { return self.asn.is_none() };
+        self.asn.is_none() || s.asn_modified().and_then(|t| t.elapsed().ok()).is_none_or(|age| age > crate::asn::MAX_AGE)
+    }
+
+    /// Tabella ASN appena scaricata: la usa e la salva compressa. Restituisce gli errori di salvataggio.
+    pub fn set_asn(&mut self, table: Arc<AsnTable>, gz: &[u8]) -> Vec<String> {
+        self.asn = Some(table);
+        match &self.store {
+            Some(s) => s.save_asn(gz).err().map(|e| format!("salvataggio tabella ASN: {e}")).into_iter().collect(),
+            None => Vec::new(),
         }
     }
 
@@ -258,7 +292,10 @@ impl State {
     fn ordered_candidates(&self) -> Vec<Candidate> {
         let mut pool: Vec<Candidate> = self.filtered_candidates().into_iter().cloned().collect();
         match self.settings.order {
-            Order::Priority => pool = rating::order_by_priority(pool, &rating::ratings(&self.sources)),
+            Order::Priority => {
+                let net = rating::NetLift::new(&self.net, self.asn.as_deref());
+                pool = rating::order_by_priority(pool, &rating::ratings(&self.sources), &net);
+            }
             Order::Random => pool.shuffle(&mut rand::thread_rng()),
         }
         pool

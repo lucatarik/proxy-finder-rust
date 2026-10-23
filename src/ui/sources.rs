@@ -1,11 +1,17 @@
 //! Scheda Sorgenti: elenco, rating, aggiunta e rimozione.
 
-use super::{ago, rating_color, App, RED};
+use super::{ago, rating_color, App, GREEN, RED, YELLOW};
 use eframe::egui::{self, RichText};
-use proxy_finder::model::{Format, Protocol};
+use proxy_finder::model::{Format, GroupStats, NetStats, Protocol};
 use proxy_finder::rating::{self, source_rating};
 use proxy_finder::sources::custom_source;
+use proxy_finder::state::Part;
 use proxy_finder::store::restore_default_sources;
+
+/// Righe per lato (migliori / peggiori) nelle tabelle del rating per rete.
+const NET_ROWS: usize = 8;
+/// Reti mostrate solo con almeno tante prove.
+const NET_MIN_SHOW: u64 = 20;
 
 impl App {
     pub fn sources_tab(&mut self, ui: &mut egui::Ui) {
@@ -36,6 +42,7 @@ impl App {
             .small()
             .weak(),
         );
+        egui::CollapsingHeader::new("Rating per rete (ASN e /24)").show(ui, |ui| self.net_ratings(ui, busy));
         ui.separator();
         self.add_source_form(ui, busy);
         ui.separator();
@@ -103,6 +110,52 @@ impl App {
         }
         if changed {
             self.save_sources();
+        }
+    }
+
+    fn net_ratings(&mut self, ui: &mut egui::Ui, busy: bool) {
+        ui.label(
+            RichText::new(
+                "Stesso conto delle sorgenti sui gruppi di IP: il provider (ASN) e la /24. Una /24 parte dal rating del suo ASN, l'ASN dalla media; × è quanto la rete sposta la priorità di prova (> 1 meglio della media).",
+            )
+            .small()
+            .weak(),
+        );
+        let st = &self.st;
+        let lift = rating::NetLift::new(&st.net, st.asn.as_deref());
+        let tested: u64 = st.net.net24.values().map(|g| g.tested).sum();
+        ui.horizontal(|ui| {
+            match &st.asn {
+                Some(t) => ui.label(format!("Tabella ASN: {} intervalli di IP.", t.len())),
+                None => ui.label(RichText::new("Tabella ASN assente: si scarica col prossimo download.").color(RED)),
+            };
+            match lift.mean() {
+                Some(m) => ui.label(format!("{tested} prove, score medio {m:.4}.")),
+                None => ui.label(format!("{tested} prove: attivo da {} prove con almeno un buono.", rating::NET_MIN_TESTED)),
+            };
+        });
+        let rows = |net: &NetStats, asn: bool| -> Vec<(String, GroupStats, f64)> {
+            let mut v: Vec<(String, GroupStats, f64)> = if asn {
+                net.asn
+                    .iter()
+                    .map(|(a, g)| (format!("AS{a} {}", st.asn.as_ref().map(|t| t.name(*a)).unwrap_or("")), g))
+                    .filter_map(|(l, g)| Some((l, g.clone(), lift.of_group(g)?)))
+                    .collect()
+            } else {
+                net.net24.iter().filter_map(|(k, g)| Some((rating::net24_label(*k), g.clone(), lift.of_group(g)?))).collect()
+            };
+            v.retain(|r| r.1.tested >= NET_MIN_SHOW);
+            v.sort_by(|a, b| b.2.total_cmp(&a.2));
+            v
+        };
+        let (asn_rows, net_rows) = (rows(&st.net, true), rows(&st.net, false));
+        ui.columns(2, |cols| {
+            net_table(&mut cols[0], "net-asn", "ASN", &asn_rows);
+            net_table(&mut cols[1], "net-24", "/24", &net_rows);
+        });
+        if ui.add_enabled(!busy, egui::Button::new("Azzera rating per rete")).clicked() {
+            self.st.net = NetStats::default();
+            self.persist(&[Part::Net]);
         }
     }
 
@@ -185,5 +238,41 @@ impl App {
                 self.confirm_clear_list = false;
             }
         }
+    }
+}
+
+/// Le migliori e le peggiori `NET_ROWS` reti (righe già ordinate per × decrescente).
+fn net_table(ui: &mut egui::Ui, id: &str, title: &str, rows: &[(String, GroupStats, f64)]) {
+    ui.label(RichText::new(format!("{title}: {} reti con almeno {NET_MIN_SHOW} prove", rows.len())).strong());
+    let skip = rows.len().saturating_sub(2 * NET_ROWS);
+    egui::Grid::new(id).striped(true).num_columns(3).show(ui, |ui| {
+        for h in ["×", "provati / buoni", "rete"] {
+            ui.label(RichText::new(h).small().strong());
+        }
+        ui.end_row();
+        for (i, (label, g, x)) in rows.iter().enumerate() {
+            if skip > 0 && i == NET_ROWS {
+                ui.label("…");
+                ui.label(RichText::new(format!("{skip} reti")).weak());
+                ui.end_row();
+            }
+            if skip == 0 || i < NET_ROWS || i >= NET_ROWS + skip {
+                ui.label(RichText::new(format!("{x:.2}")).monospace().color(lift_color(*x)));
+                ui.label(format!("{} / {}", g.tested, g.good));
+                ui.label(RichText::new(label).small());
+                ui.end_row();
+            }
+        }
+    });
+}
+
+/// Verde se la rete vale almeno una volta e mezza la media, rossa sotto i due terzi.
+fn lift_color(x: f64) -> egui::Color32 {
+    if x >= 1.5 {
+        GREEN
+    } else if x >= 0.67 {
+        YELLOW
+    } else {
+        RED
     }
 }

@@ -1,6 +1,7 @@
 //! Job asincroni (download, test, ricontrollo, connessione, verifica IP) che girano sul
 //! runtime tokio e mandano eventi alla UI. Un job non tocca mai lo stato: la UI applica gli eventi.
 
+use crate::asn::{self, AsnTable};
 use crate::model::{Candidate, GoodProxy, Source};
 use crate::sources::{exclude_known, fetch_all, http_client, merge};
 use crate::tester::{real_ip, test_one, test_pool, Outcome, TestConfig};
@@ -39,6 +40,8 @@ pub enum JobEvent {
     SourceDownloaded { id: String, count: usize, error: Option<String> },
     /// Lista unita e già filtrata (senza provati né buoni).
     Downloaded { list: Vec<Candidate>, total: usize },
+    /// Tabella IP -> ASN scaricata: la tabella letta e il file compresso da salvare.
+    AsnTable { table: Arc<AsnTable>, gz: Arc<Vec<u8>> },
     /// Esito della prova di un candidato.
     Tested { cand: Candidate, outcome: Outcome },
     /// Proxy scelto dalla connessione, appena riverificato.
@@ -104,12 +107,31 @@ async fn ensure_real_ip(tx: &Tx, known: Option<String>) -> Option<String> {
 }
 
 /// Scarica le sorgenti date, unisce le liste e toglie le chiavi già note.
-pub fn start_download(rt: &Handle, repaint: Repaint, sources: Vec<Source>, known: HashSet<String>) -> JobHandle {
+/// Scarica le sorgenti e, con `fetch_asn`, anche la tabella ASN (un errore lì non ferma il download).
+pub fn start_download(rt: &Handle, repaint: Repaint, sources: Vec<Source>, known: HashSet<String>, fetch_asn: bool) -> JobHandle {
     spawn(rt, repaint, JobKind::Download, move |tx, cancel| async move {
         let client = http_client();
         let total = sources.len();
         let mut done = 0;
-        let results = fetch_all(&client, &sources, &cancel, |r| {
+        let asn_job = async {
+            if !fetch_asn {
+                return;
+            }
+            let fetched = tokio::select! {
+                r = asn::fetch(&client) => r,
+                _ = cancel.cancelled() => return,
+            };
+            let msg = match fetched {
+                Ok((gz, table)) => {
+                    let msg = format!("tabella ASN: {} intervalli di IP", table.len());
+                    tx.send(JobEvent::AsnTable { table: Arc::new(table), gz: Arc::new(gz) });
+                    msg
+                }
+                Err(e) => format!("tabella ASN: errore {e} (resta quella di prima)"),
+            };
+            tx.send(JobEvent::Log(msg));
+        };
+        let lists_job = fetch_all(&client, &sources, &cancel, |r| {
             done += 1;
             let (count, error) = match &r.result {
                 Ok(l) => (l.len(), None),
@@ -121,8 +143,8 @@ pub fn start_download(rt: &Handle, repaint: Repaint, sources: Vec<Source>, known
                 Some(e) => format!("{}: errore {e}", r.id),
             }));
             tx.send(JobEvent::Progress { done, total, found: 0, phase: "download".into() });
-        })
-        .await;
+        });
+        let (results, ()) = tokio::join!(lists_job, asn_job);
         if cancel.is_cancelled() {
             tx.finish(JobKind::Download, "download annullato", true);
             return;

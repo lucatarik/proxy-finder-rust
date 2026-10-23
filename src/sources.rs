@@ -151,6 +151,12 @@ pub fn http_client() -> reqwest::Client {
 }
 
 async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String, String> {
+    let body = fetch_bytes(client, url).await?;
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+/// Scarica `url` (al massimo 32 MB).
+pub async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     let mut res = client.get(url).send().await.map_err(|e| short_err(&e))?;
     if !res.status().is_success() {
         return Err(format!("HTTP {}", res.status().as_u16()));
@@ -162,7 +168,7 @@ async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String, Strin
             return Err("risposta oltre 32 MB".into());
         }
     }
-    Ok(String::from_utf8_lossy(&body).into_owned())
+    Ok(body)
 }
 
 fn short_err(e: &reqwest::Error) -> String {

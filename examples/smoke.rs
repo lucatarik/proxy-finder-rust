@@ -24,7 +24,7 @@ async fn main() {
     let ip = tester::real_ip(&client).await.expect("ip reale");
     println!("IP reale {ip}");
     let r = rating::ratings(&srcs);
-    let mut l = rating::order_by_priority(list, &r);
+    let mut l = rating::order_by_priority(list, &r, &rating::NetLift::none());
     l.truncate(n);
     let t0 = std::time::Instant::now();
     let mut good = 0;

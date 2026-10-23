@@ -1,6 +1,7 @@
 //! Tipi condivisi tra libreria e interfaccia.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -101,6 +102,25 @@ pub struct SourceStats {
     pub last_download: Option<i64>,
     pub last_count: u64,
     pub last_error: Option<String>,
+}
+
+/// Esiti della prima prova di un gruppo di candidati (stesso ASN o stessa /24).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GroupStats {
+    pub tested: u64,
+    pub good: u64,
+    /// Somma degli score dei proxy buoni.
+    pub score_sum: f64,
+}
+
+/// Rating per rete: esiti raggruppati per ASN (numero) e per /24 (IP senza l'ultimo ottetto,
+/// `u32::from(ip) >> 8`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetStats {
+    pub asn: BTreeMap<u32, GroupStats>,
+    pub net24: BTreeMap<u32, GroupStats>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

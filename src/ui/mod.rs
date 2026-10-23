@@ -221,7 +221,7 @@ impl App {
             return;
         }
         let known = self.st.known_keys();
-        let h = job::start_download(self.rt.handle(), self.repaint.clone(), enabled, known);
+        let h = job::start_download(self.rt.handle(), self.repaint.clone(), enabled, known, self.st.asn_stale());
         self.begin(h);
     }
 
@@ -288,6 +288,10 @@ impl App {
                 JobEvent::Downloaded { list, .. } => {
                     self.st.candidates = list;
                     self.cand_gen += 1;
+                }
+                JobEvent::AsnTable { table, gz } => {
+                    let errs = self.st.set_asn(table, &gz);
+                    self.errors.extend(errs);
                 }
                 JobEvent::Tested { cand, outcome } => self.st.apply_tested(kind, &cand, &outcome, &mut self.test_stats),
                 JobEvent::Connected(g) => {

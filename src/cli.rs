@@ -2,7 +2,7 @@
 
 use proxy_finder::countries;
 use proxy_finder::job::{self, JobEvent, JobHandle, JobKind, Repaint};
-use proxy_finder::model::{Endpoint, Format, GoodProxy, Protocol};
+use proxy_finder::model::{Endpoint, Format, GoodProxy, GroupStats, Protocol};
 use proxy_finder::rating::{self, source_rating};
 use proxy_finder::relay;
 use proxy_finder::sources::custom_source;
@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 /// Modalità auto: proxy provati per lotto (tutti in parallelo) e buoni con https da trovare.
 const AUTO_BATCH: usize = 128;
 const AUTO_WANT: usize = 10;
+/// `nets` mostra solo le reti con almeno tante prove.
+const NETS_MIN_SHOW: u64 = 20;
 /// Pausa casuale (secondi) tra la scansione e la prova di velocità che sceglie il proxy.
 const AUTO_JITTER_SECS: std::ops::RangeInclusive<u64> = 3..=8;
 
@@ -43,7 +45,8 @@ COMANDI
   export [FILE] [--json]             esporta i buoni funzionanti (stdout se manca FILE)
   remove <proto://ip:porta>...       rimuove dei buoni
   prune                              rimuove i buoni che non rispondono
-  clear list|history                 svuota lista scaricata o storico dei test
+  nets [asn|24] [-n N]               rating per rete: le N reti (ASN o /24) migliori e peggiori
+  clear list|history|nets            svuota lista scaricata, storico dei test o rating per rete
   ip [proto://ip:porta]              IP reale (e IP di uscita attraverso un proxy)
   relay [--port N] [proto://ip:porta]
                                      avvia il relay locale e lo collega (default: il più veloce)
@@ -154,6 +157,7 @@ pub fn run(args: Vec<String>) -> i32 {
         "remove" => cx.remove(rest),
         "prune" => cx.prune(),
         "clear" => cx.clear(rest),
+        "nets" => cx.nets(rest),
         "ip" => cx.ip(rest),
         "relay" => cx.relay(rest),
         "auto" => cx.auto(rest),
@@ -229,6 +233,17 @@ fn timeouts_normal(cfg: &mut TestConfig) {
 }
 
 /// Bandiera e alpha-3, es. "🇮🇹 ITA" (larghezza visibile fissa: 6 colonne).
+/// "N min fa" per un istante di sistema.
+fn ago_sys(t: std::time::SystemTime) -> String {
+    let d = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    match d {
+        0..=59 => format!("{d} s fa"),
+        60..=3599 => format!("{} min fa", d / 60),
+        3600..=86_399 => format!("{} h fa", d / 3600),
+        _ => format!("{} g fa", d / 86_400),
+    }
+}
+
 fn cc(c: &str) -> String {
     let flag = countries::flag_emoji(c);
     format!("{} {:<3}", if flag.is_empty() { "  " } else { &flag }, countries::alpha3(c))
@@ -281,6 +296,11 @@ impl Ctx {
                 }
                 JobEvent::SourceDownloaded { id, count, error } => self.st.record_download(&id, count, error),
                 JobEvent::Downloaded { list, .. } => self.st.candidates = list,
+                JobEvent::AsnTable { table, gz } => {
+                    for e in self.st.set_asn(table, &gz) {
+                        eprintln!("errore: {e}");
+                    }
+                }
                 JobEvent::Tested { cand, outcome } => {
                     self.st.apply_tested(h.kind, &cand, &outcome, &mut count);
                     if let Outcome::Good(g) = &outcome {
@@ -366,7 +386,72 @@ impl Ctx {
             st.settings.test_protocol.map(|p| p.to_string()).unwrap_or_else(|| "all".into()),
             if st.settings.test_country.is_empty() { "all" } else { &st.settings.test_country },
         );
+        match (&st.asn, st.store.as_ref().and_then(|s| s.asn_modified())) {
+            (Some(t), m) => out!("tabella ASN       {} intervalli di IP{}", t.len(), m.map(|m| format!(", scaricata {}", ago_sys(m))).unwrap_or_default()),
+            (None, _) => out!("tabella ASN       assente: si scarica col prossimo download"),
+        }
+        let tested: u64 = st.net.net24.values().map(|g| g.tested).sum();
+        out!(
+            "rating per rete   {} ASN e {} /24 da {tested} prove{}",
+            st.net.asn.len(),
+            st.net.net24.len(),
+            if rating::net_mean(&st.net).is_some() { "" } else { " (attivo da 100 prove)" }
+        );
         out!("relay             127.0.0.1:{}", st.settings.relay_port);
+        Ok(0)
+    }
+
+    /// Le reti migliori e peggiori per moltiplicatore di priorità (solo quelle con abbastanza prove).
+    fn nets(&mut self, args: &[String]) -> Res {
+        let n: usize = match opt(args, "--count", "-n")? {
+            Some(v) => v.parse().map_err(|_| usage(format!("numero non valido: {v}")))?,
+            None => 10,
+        };
+        let which = positional(args, &["--count", "-n"]);
+        let (show_asn, show_24) = match which.first().map(String::as_str) {
+            None => (true, true),
+            Some("asn") => (true, false),
+            Some("24") => (false, true),
+            Some(w) => return Err(usage(format!("uso: nets [asn|24] [-n N], non {w}"))),
+        };
+        let st = &self.st;
+        let lift = rating::NetLift::new(&st.net, st.asn.as_deref());
+        let tested: u64 = st.net.net24.values().map(|g| g.tested).sum();
+        let Some(mean) = lift.mean() else {
+            out!("rating per rete non ancora attivo: servono almeno {} prove con almeno un buono (ora {tested})", rating::NET_MIN_TESTED);
+            return Ok(0);
+        };
+        out!("{tested} prove, score medio {:.4} per prova; x = moltiplicatore della priorità (reti con almeno {NETS_MIN_SHOW} prove)", mean);
+        let table = |title: &str, rows: Vec<(String, &GroupStats)>| {
+            let mut rows: Vec<(String, &GroupStats, f64)> =
+                rows.into_iter().filter(|(_, g)| g.tested >= NETS_MIN_SHOW).filter_map(|(l, g)| Some((l, g, lift.of_group(g)?))).collect();
+            rows.sort_by(|a, b| b.2.total_cmp(&a.2));
+            out!("\n{title}: {} reti", rows.len());
+            if rows.is_empty() {
+                return;
+            }
+            out!("{:>6}  {:>7}  {:>5}  RETE", "x", "PROVATI", "BUONI");
+            // le prime n e le ultime n; in mezzo "…"
+            let skip = rows.len().saturating_sub(2 * n);
+            for (i, (l, g, x)) in rows.iter().enumerate() {
+                if skip > 0 && i == n {
+                    out!("{:>6}  ({skip} reti)", "…");
+                }
+                if skip == 0 || i < n || i >= n + skip {
+                    out!("{x:>6.2}  {:>7}  {:>5}  {l}", g.tested, g.good);
+                }
+            }
+        };
+        if show_asn {
+            if st.asn.is_none() {
+                out!("\ntabella ASN assente: si scarica col prossimo download");
+            }
+            let name = |a: u32| st.asn.as_ref().map(|t| t.name(a).to_string()).unwrap_or_default();
+            table("ASN", st.net.asn.iter().map(|(a, g)| (format!("AS{a} {}", name(*a)), g)).collect());
+        }
+        if show_24 {
+            table("/24", st.net.net24.iter().map(|(k, g)| (rating::net24_label(*k), g)).collect());
+        }
         Ok(0)
     }
 
@@ -477,7 +562,7 @@ impl Ctx {
         if enabled.is_empty() {
             return Err("nessuna sorgente abilitata (sources enable <id>)".into());
         }
-        let h = job::start_download(self.rt.handle(), Self::noop(), enabled, self.st.known_keys());
+        let h = job::start_download(self.rt.handle(), Self::noop(), enabled, self.st.known_keys(), self.st.asn_stale());
         Ok(if self.drive(h).cancelled { 130 } else { 0 })
     }
 
@@ -650,7 +735,13 @@ impl Ctx {
                 self.save(&[Part::History])?;
                 out!("storico svuotato ({n} voci): i proxy già provati possono tornare al prossimo download");
             }
-            _ => return Err(usage("uso: clear list|history")),
+            Some("nets") => {
+                let n = self.st.net.asn.len() + self.st.net.net24.len();
+                self.st.net = Default::default();
+                self.save(&[Part::Net])?;
+                out!("rating per rete azzerato ({n} reti)");
+            }
+            _ => return Err(usage("uso: clear list|history|nets")),
         }
         Ok(0)
     }

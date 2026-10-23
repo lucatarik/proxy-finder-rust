@@ -46,7 +46,7 @@ chromium --proxy-server="http://127.0.0.1:8899"
 ### `status`
 Riepilogo: cartella dati, candidati non ancora provati (per protocollo), proxy buoni
 (funzionanti, con https, che non rispondono), storico dei test, sorgenti abilitate, le tre con
-rating migliore, opzioni di test salvate, porta del relay.
+rating migliore, opzioni di test salvate, tabella ASN, rating per rete, porta del relay.
 
 ### `sources` — gestione delle sorgenti
 
@@ -83,6 +83,8 @@ proxy-finder sources disable --all && proxy-finder sources enable monosans proxi
 Scarica le sorgenti abilitate (6 alla volta), unisce le liste senza duplicati alternando una voce
 per sorgente, senza limite di numero. Esclude i proxy già provati (storico) e quelli già buoni. Stampa una
 riga per sorgente (voci o errore) e il totale. Sostituisce la lista scaricata precedente.
+Se manca o ha più di 7 giorni, scarica anche la tabella IP → ASN per il rating per rete (un errore
+lì non ferma il download).
 
 ### `test [opzioni]`
 Prova i candidati scaricati e aggiorna buoni, storico e rating delle sorgenti. Stampa una riga per
@@ -128,9 +130,27 @@ proxy-finder export buoni.json --json
 ### `remove <proto://ip:porta>...` e `prune`
 `remove` toglie i proxy indicati dai buoni; `prune` toglie tutti quelli marcati `non risp.`.
 
-### `clear list|history`
+### `clear list|history|nets`
 `clear list` svuota la lista scaricata. `clear history` svuota lo storico dei test: al prossimo
-`download` i proxy già provati possono tornare.
+`download` i proxy già provati possono tornare. `clear nets` azzera il rating per rete.
+
+### `nets [asn|24] [-n N]`
+Rating per rete: per ASN (provider) e per /24, le N reti migliori e le N peggiori (default 10)
+fra quelle con almeno 20 prove. `x` è il moltiplicatore della priorità di prova: 1 = come la
+media, 2 = il doppio, 0,2 = un quinto. Attivo dopo 100 prove con almeno un buono.
+
+```
+$ proxy-finder nets asn -n 2
+4096 prove, score medio 0.0076 per prova; x = moltiplicatore della priorità (reti con almeno 20 prove)
+
+ASN: 22 reti
+     x  PROVATI  BUONI  RETE
+  2.91       29      2  AS14061 DIGITALOCEAN-ASN
+  2.37       58      6  AS16509 AMAZON-02
+     …  (18 reti)
+  0.29      124      0  AS13335 CLOUDFLARENET
+  0.27      134      0  AS45102 ALIBABA-CN-NET Alibaba US Technology Co., Ltd.
+```
 
 ### `ip [proto://ip:porta]`
 Stampa l'IP reale. Con un proxy, anche l'IP di uscita visto attraverso di lui, e avvisa se
@@ -273,6 +293,9 @@ rating = (somma degli score dei buoni + prior × 5) / (proxy provati + 5)
 
 Un proxy buono alza il rating tanto più quanto è veloce; uno morto lo abbassa. `recheck`, `relay`
 e le prove annullate non lo toccano. Dettagli ed esempio numerico in `GUIDA.md`.
+
+L'ordine `priority` (anche in `auto`) moltiplica il rating della sorgente per quello della rete
+del proxy (ASN e /24, vedi `nets`), imparato allo stesso modo dalle prime prove.
 
 ## Esempi di automazione
 

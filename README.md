@@ -1,9 +1,10 @@
 # Proxy Finder
 
 Desktop app and CLI in Rust that downloads public proxy lists from GitHub, tests every proxy
-(HTTP and HTTPS/CONNECT, http/socks4/socks5), keeps the working ones and rates each source by how
-many good proxies it yields. A local relay on `127.0.0.1:8899` routes any program through the
-proxy you pick; `proxy-finder --auto` finds, verifies and connects to the fastest one by itself.
+(HTTP and HTTPS/CONNECT, http/socks4/socks5) and keeps the working ones. It rates each source,
+provider network (ASN) and /24 by how many good proxies it yields, and tests the most promising
+first. A local relay on `127.0.0.1:8899` routes any program through the proxy you pick;
+`proxy-finder --auto` finds, verifies and connects to the fastest one by itself.
 
 ```bash
 cargo build --release        # binary: target/release/proxy-finder

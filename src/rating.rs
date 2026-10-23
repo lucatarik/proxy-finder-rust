@@ -4,10 +4,16 @@
 //! ogni proxy buono aggiunge il suo score (0..1) al numeratore, ogni proxy morto aggiunge 0;
 //! entrambi contano 1 al denominatore. Il prior pesa come `PRIOR_WEIGHT` prove fittizie, così
 //! poche prove non spostano troppo il valore e le liste enormi non vanno a meno infinito.
+//!
+//! Il rating per rete fa lo stesso conto sui gruppi di IP: l'ASN (il provider) e la /24. Una /24
+//! parte dal rating del suo ASN, l'ASN dalla media di tutte le prove; il risultato diviso per la
+//! media è il moltiplicatore ("lift") della priorità: > 1 rete migliore della media, < 1 peggiore.
 
-use crate::model::{Candidate, Source};
+use crate::asn::AsnTable;
+use crate::model::{Candidate, GroupStats, NetStats, Source};
 use crate::tester::Outcome;
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 
 pub const PRIOR_WEIGHT: f64 = 5.0;
 
@@ -53,6 +59,99 @@ pub fn apply_outcome(sources: &mut [Source], cand: &Candidate, outcome: &Outcome
     }
 }
 
+/// Peso del rating "di partenza" di un gruppo di rete, in prove fittizie.
+pub const NET_PRIOR_WEIGHT: f64 = 50.0;
+/// Prove (in tutto) sotto le quali il rating per rete non sposta ancora la priorità.
+pub const NET_MIN_TESTED: u64 = 100;
+/// Limiti del moltiplicatore di priorità di una rete.
+pub const NET_LIFT_RANGE: (f64, f64) = (0.05, 20.0);
+
+/// La /24 di un IP: l'indirizzo senza l'ultimo ottetto.
+pub fn net24(ip: Ipv4Addr) -> u32 {
+    u32::from(ip) >> 8
+}
+
+/// "a.b.c.0/24" per la chiave di `net24`.
+pub fn net24_label(n: u32) -> String {
+    format!("{}/24", Ipv4Addr::from(n << 8))
+}
+
+fn record_group(g: &mut GroupStats, outcome: &Outcome) {
+    match outcome {
+        Outcome::Good(p) => {
+            g.tested += 1;
+            g.good += 1;
+            g.score_sum += p.score.clamp(0.0, 1.0);
+        }
+        Outcome::Dead { .. } => g.tested += 1,
+        Outcome::Cancelled => {}
+    }
+}
+
+/// Accredita l'esito della prima prova alla /24 e, se noto, all'ASN dell'IP. `Cancelled` non conta.
+pub fn apply_net_outcome(stats: &mut NetStats, asn: Option<u32>, ip: Ipv4Addr, outcome: &Outcome) {
+    if *outcome == Outcome::Cancelled {
+        return;
+    }
+    record_group(stats.net24.entry(net24(ip)).or_default(), outcome);
+    if let Some(a) = asn {
+        record_group(stats.asn.entry(a).or_default(), outcome);
+    }
+}
+
+/// Score medio per prova su tutte le prove (ogni prova ha una /24); `None` finché le prove sono
+/// meno di `NET_MIN_TESTED` o nessuna è andata bene.
+pub fn net_mean(stats: &NetStats) -> Option<f64> {
+    let (tested, sum) = stats.net24.values().fold((0u64, 0.0), |(t, s), g| (t + g.tested, s + g.score_sum));
+    (tested >= NET_MIN_TESTED && sum > 0.0).then(|| sum / tested as f64)
+}
+
+/// Media bayesiana dello score di un gruppo, che parte da `prior` (peso `NET_PRIOR_WEIGHT`).
+pub fn group_rating(g: Option<&GroupStats>, prior: f64) -> f64 {
+    match g {
+        Some(g) => (g.score_sum + prior * NET_PRIOR_WEIGHT) / (g.tested as f64 + NET_PRIOR_WEIGHT),
+        None => prior,
+    }
+}
+
+/// Moltiplicatore di priorità per rete (ASN e /24), calcolato una volta per ordinamento.
+pub struct NetLift<'a> {
+    stats: &'a NetStats,
+    asn: Option<&'a AsnTable>,
+    mean: Option<f64>,
+}
+
+impl<'a> NetLift<'a> {
+    pub fn new(stats: &'a NetStats, asn: Option<&'a AsnTable>) -> NetLift<'a> {
+        NetLift { stats, asn, mean: net_mean(stats) }
+    }
+
+    /// Nessun effetto: ogni rete vale 1.
+    pub fn none() -> NetLift<'static> {
+        static EMPTY: std::sync::OnceLock<NetStats> = std::sync::OnceLock::new();
+        NetLift { stats: EMPTY.get_or_init(NetStats::default), asn: None, mean: None }
+    }
+
+    /// Rating dell'ASN (dalla media) e della /24 (dal rating dell'ASN), diviso la media.
+    pub fn of(&self, ip: Ipv4Addr) -> f64 {
+        let Some(mean) = self.mean else { return 1.0 };
+        let asn = self.asn.and_then(|t| t.lookup(ip));
+        let asn_r = group_rating(asn.and_then(|a| self.stats.asn.get(&a)), mean);
+        let net_r = group_rating(self.stats.net24.get(&net24(ip)), asn_r);
+        (net_r / mean).clamp(NET_LIFT_RANGE.0, NET_LIFT_RANGE.1)
+    }
+
+    /// Moltiplicatore di un gruppo qualsiasi rispetto alla media (per mostrarlo).
+    pub fn of_group(&self, g: &GroupStats) -> Option<f64> {
+        let mean = self.mean?;
+        Some((group_rating(Some(g), mean) / mean).clamp(NET_LIFT_RANGE.0, NET_LIFT_RANGE.1))
+    }
+
+    pub fn mean(&self) -> Option<f64> {
+        self.mean
+    }
+}
+
 pub fn ratings(sources: &[Source]) -> HashMap<String, f64> {
     sources.iter().map(|s| (s.id.clone(), source_rating(s))).collect()
 }
@@ -74,10 +173,14 @@ pub fn candidate_priority(c: &Candidate, ratings: &HashMap<String, f64>) -> f64 
     r * (0.5 + 0.5 * meta)
 }
 
-/// Ordina per priorità a fasce di 0.05: dentro una fascia resta l'ordine di partenza
-/// (l'alternanza tra sorgenti del merge), così una lista enorme con metadati appena
-/// migliori non monopolizza la scansione.
-pub fn order_by_priority(mut list: Vec<Candidate>, ratings: &HashMap<String, f64>) -> Vec<Candidate> {
-    list.sort_by_cached_key(|c| std::cmp::Reverse((candidate_priority(c, ratings) * 20.0).round() as i64));
+/// Ordina per priorità (sorgenti × rete) a fasce larghe circa il 28% (un quarto di unità sulla
+/// scala logaritmica naturale): dentro una fascia resta l'ordine di partenza (l'alternanza tra
+/// sorgenti del merge), così una lista enorme con metadati appena migliori non monopolizza la
+/// scansione. Le fasce sono relative perché dopo molte prove i rating sono tutti piccoli.
+pub fn order_by_priority(mut list: Vec<Candidate>, ratings: &HashMap<String, f64>, net: &NetLift) -> Vec<Candidate> {
+    list.sort_by_cached_key(|c| {
+        let p = candidate_priority(c, ratings) * net.of(c.ip);
+        std::cmp::Reverse((p.max(1e-9).ln() * 4.0).round() as i64)
+    });
     list
 }

@@ -1,6 +1,7 @@
 //! Persistenza JSON nella cartella di configurazione.
 
-use crate::model::{Candidate, GoodProxy, Protocol, Source};
+use crate::asn::{self, AsnTable};
+use crate::model::{Candidate, GoodProxy, NetStats, Protocol, Source};
 use crate::sources::default_sources;
 use crate::tester::TestConfig;
 use anyhow::{Context, Result};
@@ -215,6 +216,32 @@ impl Store {
     }
     pub fn clear_switch(&self) {
         let _ = std::fs::remove_file(self.path("relay-switch.json"));
+    }
+
+    pub fn load_net(&self) -> NetStats {
+        self.load("net-ratings.json").unwrap_or_default()
+    }
+    pub fn save_net(&self, n: &NetStats) -> Result<()> {
+        self.save("net-ratings.json", n)
+    }
+
+    /// Tabella ASN salvata; se illeggibile la sposta in `<file>.bad` (si riscarica col download).
+    pub fn load_asn(&self) -> Option<AsnTable> {
+        let p = self.path(asn::FILE);
+        let gz = std::fs::read(&p).ok()?;
+        match AsnTable::from_gz(&gz) {
+            Ok(t) => Some(t),
+            Err(_) => {
+                let _ = std::fs::rename(&p, self.path(&format!("{}.bad", asn::FILE)));
+                None
+            }
+        }
+    }
+    pub fn save_asn(&self, gz: &[u8]) -> Result<()> {
+        write_atomic(&self.path(asn::FILE), gz)
+    }
+    pub fn asn_modified(&self) -> Option<std::time::SystemTime> {
+        modified(&self.path(asn::FILE))
     }
 
     pub fn load_settings(&self) -> Settings {

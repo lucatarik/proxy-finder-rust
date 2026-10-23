@@ -109,10 +109,48 @@ score 0,92; 2 solo http a 1500 ms, score 0,35), 24 sono morti.
 Rating = (4×0,92 + 2×0,35 + 0,35×5) / (30 + 5) = (3,68 + 0,70 + 1,75) / 35 = **0,175**, cioè
 17,5 su 100.
 
-Il rating decide l'ordine dei test ("prima i più promettenti"): priorità = rating migliore tra le
-sorgenti del proxy × (0,5 + 0,5 × metadati), dove i metadati sono la latenza dichiarata o
-l'uptime. L'ordinamento è a fasce di 0,05 e dentro ogni fascia resta l'alternanza tra
-sorgenti, così una lista enorme con metadati appena migliori non monopolizza la scansione.
+Il rating decide l'ordine dei test ("prima i più promettenti", ordine `priority`, usato anche da
+`--auto`):
+
+```
+priorità = rating migliore tra le sorgenti del proxy × (0,5 + 0,5 × metadati) × rete
+```
+
+dove i metadati sono la latenza dichiarata o l'uptime e "rete" è il moltiplicatore del rating per
+rete (sotto). L'ordinamento è a fasce relative, larghe circa il 28% (un quarto di unità sulla scala
+logaritmica): dentro ogni fascia resta l'alternanza tra sorgenti, così una lista enorme con
+metadati appena migliori non monopolizza la scansione. Le fasce sono relative perché, dopo molte
+prove, i rating sono tutti piccoli (pochi proxy pubblici funzionano) e fasce fisse li
+metterebbero tutti insieme.
+
+### Rating per rete (ASN e /24)
+
+Lo stesso conto si fa sui gruppi di IP, perché nelle liste certe reti non danno mai proxy
+funzionanti (ad esempio gli IP di Cloudflare, che non sono proxy) e altre ne danno spesso:
+
+- **ASN**: la rete del provider che possiede l'IP (es. AS13335 Cloudflare, AS16509 Amazon). La
+  tabella IP → ASN viene da [iptoasn.com](https://iptoasn.com) (pubblico dominio), si scarica
+  insieme alle sorgenti quando manca o ha più di 7 giorni e resta nella cartella dati
+  (`ip2asn-v4.tsv.gz`, circa 7 MB). Senza tabella si usa solo la /24;
+- **/24**: l'IP senza l'ultimo ottetto (es. `45.74.31.0/24`), utile per i blocchi di proxy dello
+  stesso operatore.
+
+Ogni prima prova di un candidato accredita l'esito (score se buono, 0 se morto) al suo ASN e
+alla sua /24. Il rating di un gruppo è una media con prior, come per le sorgenti, ma il prior è a
+cascata e pesa 50 prove:
+
+```
+media     = somma di tutti gli score / prove (tutte le reti)
+asn       = (somma score dell'ASN + media × 50) / (prove dell'ASN + 50)
+/24       = (somma score della /24 + asn × 50) / (prove della /24 + 50)
+rete      = /24 / media, limitato fra 0,05 e 20
+```
+
+Una /24 mai vista prende il rating del suo ASN, un ASN mai visto la media (moltiplicatore 1).
+Finché le prove in tutto sono meno di 100, o nessuna è andata bene, il moltiplicatore vale 1 per
+tutti. Come per le sorgenti, solo il job Test lo muove: ricontrolli, connessioni e prove
+annullate no. L'ordine `random` lo ignora. Si vede nella scheda Sorgenti ("Rating per rete") e
+con `proxy-finder nets`; si azzera da lì o con `proxy-finder clear nets`.
 
 ## Come vengono verificati
 
@@ -187,8 +225,9 @@ gfpcom (404).
 
 In `~/.config/proxy-finder/` (o in `$PROXY_FINDER_HOME`): `sources.json`, `proxies.json`,
 `candidates.json` (tuple compatte `[proto, ip, porta, paese, latenza, uptime, [sorgenti], https dichiarato]`; si leggono anche quelle a 7 elementi delle versioni precedenti),
-`history.json`, `settings.json`. Le scritture sono atomiche; un file corrotto viene copiato in
-`<file>.bad` e sostituito dal default.
+`history.json`, `settings.json`, `net-ratings.json` (rating per rete) e `ip2asn-v4.tsv.gz`
+(tabella ASN). Le scritture sono atomiche; un file corrotto viene copiato in
+`<file>.bad` e sostituito dal default (la tabella ASN si riscarica al download successivo).
 
 ## Limiti e avvertenze
 
@@ -206,7 +245,8 @@ src/lib.rs        moduli della libreria (senza GUI)
 src/model.rs      Protocol, Format, Source, Candidate, GoodProxy
 src/parse.rs      parser dei formati
 src/sources.rs    sorgenti predefinite, download, unione round-robin
-src/rating.rs     score dei proxy, rating delle sorgenti, priorità
+src/rating.rs     score dei proxy, rating delle sorgenti e per rete, priorità
+src/asn.rs        tabella IP -> ASN (iptoasn.com) per il rating per rete
 src/tester.rs     test a due passaggi, pool, parse_echo
 src/store.rs      persistenza JSON, impostazioni
 src/relay.rs      proxy HTTP locale verso l'upstream

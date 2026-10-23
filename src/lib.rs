@@ -1,6 +1,7 @@
 //! proxy-finder: scarica liste di proxy pubblici, le prova e tiene i buoni.
 //! La GUI (eframe) sta in `src/main.rs` e `src/ui/`; qui c'è solo la logica.
 
+pub mod asn;
 pub mod countries;
 pub mod job;
 pub mod model;

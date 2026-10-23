@@ -199,8 +199,139 @@ fn priority_order_keeps_interleave_within_bands() {
     r.insert("z".to_string(), 0.05);
     // ordine di unione: a, b, z, a, b
     let l = vec![cand("1.0.0.1", 1, "a"), cand("2.0.0.1", 1, "b"), cand("9.0.0.1", 1, "z"), cand("1.0.0.2", 1, "a"), cand("2.0.0.2", 1, "b")];
-    let o: Vec<_> = order_by_priority(l, &r).iter().map(|c| c.sources[0].clone()).collect();
+    let o: Vec<_> = order_by_priority(l, &r, &NetLift::none()).iter().map(|c| c.sources[0].clone()).collect();
     assert_eq!(o, vec!["a", "b", "a", "b", "z"]);
+}
+
+// ---------- rating per rete (ASN e /24) ----------
+
+const ASN_TSV: &str = "10.0.0.0\t10.0.255.255\t200\tIT\tBUONA\n\
+1.0.0.0\t1.0.0.255\t100\tUS\tPESSIMA NET\n\
+garbage line\n\
+2.0.0.0\t1.0.0.0\t5\tXX\tROVESCIATA\n\
+20.0.0.0\t20.0.0.255\t0\tNone\tNot routed\n";
+
+#[test]
+fn asn_table_parse_and_lookup() {
+    use proxy_finder::asn::AsnTable;
+    let t = AsnTable::parse(ASN_TSV);
+    assert_eq!(t.len(), 3, "righe malformate o rovesciate saltate");
+    let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
+    assert_eq!(t.lookup(ip("1.0.0.0")), Some(100));
+    assert_eq!(t.lookup(ip("1.0.0.255")), Some(100));
+    assert_eq!(t.lookup(ip("10.0.7.1")), Some(200));
+    assert_eq!(t.lookup(ip("20.0.0.9")), Some(0));
+    assert_eq!(t.lookup(ip("1.0.1.0")), None);
+    assert_eq!(t.lookup(ip("0.0.0.1")), None);
+    assert_eq!(t.lookup(ip("255.255.255.255")), None);
+    assert_eq!(t.name(100), "PESSIMA NET");
+
+    use std::io::Write;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    enc.write_all(ASN_TSV.as_bytes()).unwrap();
+    let gz = enc.finish().unwrap();
+    assert_eq!(AsnTable::from_gz(&gz).unwrap().lookup(ip("10.0.0.1")), Some(200));
+    assert!(AsnTable::from_gz(b"non gzip").is_err());
+    assert!(AsnTable::from_gz(&flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()).finish().unwrap()).is_err());
+}
+
+fn gz_asn() -> Vec<u8> {
+    use std::io::Write;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    enc.write_all(ASN_TSV.as_bytes()).unwrap();
+    enc.finish().unwrap()
+}
+
+/// 200 prove: la rete 10.0.0.0/16 (AS200) dà buoni veloci, 1.0.0.0/24 (AS100) solo morti.
+fn net_stats(t: &proxy_finder::asn::AsnTable) -> NetStats {
+    let mut n = NetStats::default();
+    let dead = Outcome::Dead { reason: "x".into() };
+    for i in 0..100u8 {
+        let good_ip = Ipv4Addr::new(10, 0, i / 25, i);
+        let o = if i % 2 == 0 { good(200, true, &["a"]) } else { dead.clone() };
+        apply_net_outcome(&mut n, t.lookup(good_ip), good_ip, &o);
+        let bad_ip = Ipv4Addr::new(1, 0, 0, i);
+        apply_net_outcome(&mut n, t.lookup(bad_ip), bad_ip, &dead);
+    }
+    n
+}
+
+#[test]
+fn net_lift_ranks_networks() {
+    let t = proxy_finder::asn::AsnTable::parse(ASN_TSV);
+    let n = net_stats(&t);
+    assert_eq!((n.asn[&200].tested, n.asn[&200].good, n.asn[&100].good), (100, 50, 0));
+    assert_eq!(n.net24.len(), 5, "4 /24 in 10.0.x e 1.0.0");
+
+    let lift = NetLift::new(&n, Some(&t));
+    let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
+    let (good_net, bad_net, unknown) = (lift.of(ip("10.0.1.9")), lift.of(ip("1.0.0.77")), lift.of(ip("99.9.9.9")));
+    assert!(good_net > 1.5, "{good_net}");
+    assert!(bad_net < 0.2, "{bad_net}");
+    assert!((unknown - 1.0).abs() < 1e-9, "rete mai vista = media");
+    // /24 nuova dentro un ASN noto: eredita il rating dell'ASN
+    assert!(lift.of(ip("10.0.200.1")) > 1.5);
+    // senza tabella ASN contano solo le /24
+    let only24 = NetLift::new(&n, None);
+    assert!(only24.of(ip("10.0.200.1")) - 1.0 < 1e-9);
+    assert!(only24.of(ip("1.0.0.1")) < 0.4);
+
+    // sotto NET_MIN_TESTED prove nessun effetto; gli annullati non contano
+    let mut few = NetStats::default();
+    apply_net_outcome(&mut few, Some(100), ip("1.0.0.1"), &good(100, true, &["a"]));
+    apply_net_outcome(&mut few, Some(100), ip("1.0.0.1"), &Outcome::Cancelled);
+    assert_eq!(few.net24.values().map(|g| g.tested).sum::<u64>(), 1);
+    assert_eq!(NetLift::new(&few, Some(&t)).of(ip("1.0.0.1")), 1.0);
+    assert!(NetLift::none().of(ip("1.0.0.1")) == 1.0);
+    assert_eq!(net24_label(net24(ip("45.74.31.46"))), "45.74.31.0/24");
+}
+
+#[test]
+fn priority_order_uses_net_lift() {
+    let t = proxy_finder::asn::AsnTable::parse(ASN_TSV);
+    let n = net_stats(&t);
+    let mut r = HashMap::new();
+    r.insert("a".to_string(), 0.30);
+    r.insert("b".to_string(), 0.60);
+    // stessa sorgente: la rete buona passa davanti; la sorgente migliore non basta a una rete pessima
+    let l = vec![cand("1.0.0.200", 1, "b"), cand("50.0.0.1", 1, "a"), cand("10.0.3.200", 1, "a")];
+    let o: Vec<String> = order_by_priority(l.clone(), &r, &NetLift::new(&n, Some(&t))).iter().map(|c| c.ip.to_string()).collect();
+    assert_eq!(o, vec!["10.0.3.200", "50.0.0.1", "1.0.0.200"]);
+    // senza rating per rete conta solo la sorgente
+    let o: Vec<String> = order_by_priority(l, &r, &NetLift::none()).iter().map(|c| c.ip.to_string()).collect();
+    assert_eq!(o[0], "1.0.0.200");
+}
+
+#[test]
+fn state_net_rating_only_from_test_and_persisted() {
+    use proxy_finder::job::JobKind;
+    use proxy_finder::state::{State, TestCount};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().to_path_buf()).unwrap();
+    let mut st = State::load(Some(store.clone()));
+    assert!(st.asn.is_none() && st.asn_stale());
+    let errs = st.set_asn(Arc::new(proxy_finder::asn::AsnTable::from_gz(&gz_asn()).unwrap()), &gz_asn());
+    assert!(errs.is_empty() && !st.asn_stale());
+
+    let c = cand("10.0.0.5", 80, "a");
+    let mut count = TestCount::default();
+    for kind in [JobKind::Recheck, JobKind::Connect] {
+        st.apply_tested(kind, &c, &good(100, true, &["a"]), &mut count);
+    }
+    assert_eq!(st.net, NetStats::default(), "ricontrollo e connessione non toccano il rating per rete");
+    st.apply_tested(JobKind::Test, &c, &good(100, true, &["a"]), &mut count);
+    assert_eq!((st.net.asn[&200].good, st.net.net24[&net24(c.ip)].tested), (1, 1));
+    assert!(st.finish(JobKind::Test).is_empty());
+
+    let st2 = State::load(Some(store));
+    assert_eq!(st2.net, st.net);
+    assert_eq!(st2.asn_of(c.ip), Some(200));
+
+    // tabella corrotta: messa da parte, il resto funziona
+    std::fs::write(dir.path().join(proxy_finder::asn::FILE), b"rotto").unwrap();
+    let st3 = State::load(Some(Store::at(dir.path().to_path_buf()).unwrap()));
+    assert!(st3.asn.is_none() && st3.asn_stale());
+    assert!(dir.path().join(format!("{}.bad", proxy_finder::asn::FILE)).exists());
 }
 
 #[test]
